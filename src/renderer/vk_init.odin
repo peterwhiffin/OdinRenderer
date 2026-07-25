@@ -221,7 +221,7 @@ create_shader_modules :: proc(ren: ^Renderer, code: []byte) -> vk.ShaderModule {
 	return module
 }
 
-init :: proc(ren: ^Renderer, win: ^window.Window) {
+init :: proc(ren: ^Renderer, win: ^window.Window, res: ^Resources) {
 	vk.load_proc_addresses_global(rawptr(sdl.Vulkan_GetVkGetInstanceProcAddr()))
 	assert(vk.CreateInstance != nil, "Vulkan Global Function Pointers Not Loaded")
 
@@ -242,7 +242,14 @@ init :: proc(ren: ^Renderer, win: ^window.Window) {
 	create_depth_image(ren, win.w, win.h)
 	create_sync_primitives(ren)
 	create_command_buffer(ren)
-	ren.post_shader = create_shader_modules(ren, SHADER_FULLSCREEN)
+	create_sampler(ren)
+	// load_model(ren, res, "../glTF-Sample-Assets/Models/DamagedHelmet/glTF/DamagedHelmet.gltf")
+	load_model(ren, res, "../glTF-Sample-Assets/Models/Sponza/glTF/Sponza.gltf")
+	create_descriptor_pool(ren)
+	create_descriptor_layouts(ren, res)
+	create_descriptor_sets(ren, res)
+	// ren.post_shader = create_shader_modules(ren, SHADER_FULLSCREEN)
+	ren.default_shader = create_shader_modules(ren, SHADER_DEFAULT)
 	ren.post_pipeline, ren.post_pipeline_layout = create_pipeline(ren)
 
 	ren.test_buff = make([]Buffer, FIF)

@@ -40,7 +40,7 @@ debug_callback :: proc "system" (
 }
 
 create_debug_messenger :: proc(ren: ^Renderer) {
-	severity_flags: vk.DebugUtilsMessageSeverityFlagsEXT = {.ERROR, .WARNING, .INFO, .VERBOSE}
+	severity_flags: vk.DebugUtilsMessageSeverityFlagsEXT = {.ERROR, .WARNING}
 	type_flags: vk.DebugUtilsMessageTypeFlagsEXT = {.GENERAL, .PERFORMANCE, .VALIDATION}
 
 	dmci: vk.DebugUtilsMessengerCreateInfoEXT = {

@@ -2,7 +2,6 @@ package renderer
 
 import vma "../../../odin-vma"
 import "core:math/linalg"
-import "core:strconv"
 import vk "vendor:vulkan"
 
 ENABLE_VALIDATION :: #config(ENABLE_VALIDATION, ODIN_DEBUG)
@@ -10,17 +9,71 @@ FIF :: 2
 SHADER_PATH :: "shaders/"
 
 SHADER_FULLSCREEN :: #load("../../build/lin/fullscreen.spv")
+SHADER_DEFAULT :: #load("../../build/lin/default.spv")
+
+Transform :: struct {
+	pos:             [3]f32,
+	rot:             [3]f32,
+	scale:           [3]f32,
+	world_transform: linalg.Matrix4x4f32,
+	is_dirty:        bool,
+}
+
+Camera :: struct {
+	fov:    f32,
+	aspect: f32,
+	near:   f32,
+	far:    f32,
+	view:   linalg.Matrix4x4f32,
+	proj:   linalg.Matrix4x4f32,
+}
+
+Entity_Flags :: bit_set[Entity_Flag]
+Entity_Flag :: enum {
+	MESH_RENDERER,
+	RIGIDBODY,
+	CAMERA,
+}
+
+Entity :: struct {
+	flags:         Entity_Flag,
+	transform:     Transform,
+	mesh_renderer: Mesh_Renderer,
+	camera:        Camera,
+}
+
+Array :: struct($T: typeid) {
+	data:  []T,
+	count: u32,
+}
+
+Resources :: struct {
+	meshes: Array(Mesh),
+	images: Array(Image),
+}
+
+Vertex :: struct {
+	pos:  [3]f32,
+	norm: [3]f32,
+	uv:   [2]f32,
+}
+
+Push_Constants :: struct {
+	addr: vk.DeviceAddress,
+	tex:  u32,
+}
 
 Mesh_Uniforms :: struct {
-	pos:   linalg.Vector4f32,
-	color: linalg.Vector4f32,
+	proj:  linalg.Matrix4x4f32,
+	view:  linalg.Matrix4x4f32,
+	model: linalg.Matrix4x4f32,
 }
 
 Submesh :: struct {
-	index_offset: vk.DeviceSize,
-	index_count:  vk.DeviceSize,
+	index_offset: uint,
+	index_count:  uint,
 	tex_index:    u32,
-	tex:          ^Image,
+	// tex:          ^Image,
 }
 
 Mesh :: struct {
@@ -28,7 +81,7 @@ Mesh :: struct {
 	vertex_count: u64,
 	index_count:  u64,
 	index_offset: u64,
-	submeshes:    []Submesh,
+	submeshes:    [dynamic]Submesh,
 	buffer:       Buffer,
 }
 
@@ -68,9 +121,14 @@ Renderer :: struct {
 	semaphore_image:      []vk.Semaphore,
 	command_buffers:      []vk.CommandBuffer,
 	command_pool:         vk.CommandPool,
+	desc_pool:            vk.DescriptorPool,
+	desc_layout_tex:      vk.DescriptorSetLayout,
+	desc_set_tex:         vk.DescriptorSet,
+	sampler:              vk.Sampler,
 	post_pipeline_layout: vk.PipelineLayout,
 	post_pipeline:        vk.Pipeline,
-	post_shader:          vk.ShaderModule,
+	// post_shader:          vk.ShaderModule,
+	default_shader:       vk.ShaderModule,
 	depth_image:          Image,
 	depth_format:         vk.Format,
 	messenger:            vk.DebugUtilsMessengerEXT,
@@ -79,5 +137,6 @@ Renderer :: struct {
 	frame_index:          u32,
 	image_index:          u32,
 	test_buff:            []Buffer,
-	test_uni:             Mesh_Uniforms,
+	// test_uni:             Mesh_Uniforms,
+	entities:             Array(Entity),
 }

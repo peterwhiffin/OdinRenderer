@@ -8,10 +8,10 @@ create_pipeline :: proc(ren: ^Renderer) -> (vk.Pipeline, vk.PipelineLayout) {
 
 	pcr: vk.PushConstantRange = {
 		stageFlags = {.VERTEX, .FRAGMENT},
-		size       = size_of(vk.DeviceAddress),
+		size       = size_of(Push_Constants),
 	}
 
-	layouts: []vk.DescriptorSetLayout = {}
+	layouts: []vk.DescriptorSetLayout = {ren.desc_layout_tex}
 
 	lci: vk.PipelineLayoutCreateInfo = {
 		sType                  = .PIPELINE_LAYOUT_CREATE_INFO,
@@ -23,12 +23,24 @@ create_pipeline :: proc(ren: ^Renderer) -> (vk.Pipeline, vk.PipelineLayout) {
 
 	check(vk.CreatePipelineLayout(ren.device, &lci, nil, &layout))
 
+	vid: vk.VertexInputBindingDescription = {
+		binding   = 0,
+		stride    = size_of(Vertex),
+		inputRate = .VERTEX,
+	}
+
+	vad: []vk.VertexInputAttributeDescription = {
+		{location = 0, binding = 0, format = .R32G32B32_SFLOAT},
+		{location = 1, binding = 0, format = .R32G32B32_SFLOAT, offset = size_of(f32) * 3},
+		{location = 2, binding = 0, format = .R32G32_SFLOAT, offset = size_of(f32) * 6},
+	}
+
 	vis: vk.PipelineVertexInputStateCreateInfo = {
 		sType                           = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-		vertexBindingDescriptionCount   = 0,
-		pVertexBindingDescriptions      = nil,
-		vertexAttributeDescriptionCount = 0,
-		pVertexAttributeDescriptions    = nil,
+		vertexBindingDescriptionCount   = 1,
+		pVertexBindingDescriptions      = &vid,
+		vertexAttributeDescriptionCount = 3,
+		pVertexAttributeDescriptions    = raw_data(vad),
 	}
 
 	ias: vk.PipelineInputAssemblyStateCreateInfo = {
@@ -40,13 +52,13 @@ create_pipeline :: proc(ren: ^Renderer) -> (vk.Pipeline, vk.PipelineLayout) {
 		{
 			sType = .PIPELINE_SHADER_STAGE_CREATE_INFO,
 			stage = {.VERTEX},
-			module = ren.post_shader,
+			module = ren.default_shader,
 			pName = "vertMain",
 		},
 		{
 			sType = .PIPELINE_SHADER_STAGE_CREATE_INFO,
 			stage = {.FRAGMENT},
-			module = ren.post_shader,
+			module = ren.default_shader,
 			pName = "fragMain",
 		},
 	}
@@ -67,8 +79,9 @@ create_pipeline :: proc(ren: ^Renderer) -> (vk.Pipeline, vk.PipelineLayout) {
 
 	dci: vk.PipelineDepthStencilStateCreateInfo = {
 		sType            = .PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-		depthTestEnable  = false,
-		depthWriteEnable = false,
+		depthTestEnable  = true,
+		depthWriteEnable = true,
+		depthCompareOp   = .LESS_OR_EQUAL,
 	}
 
 	// fmt: vk.Format = .R8G8B8A8_SRGB
@@ -76,6 +89,7 @@ create_pipeline :: proc(ren: ^Renderer) -> (vk.Pipeline, vk.PipelineLayout) {
 		sType                   = .PIPELINE_RENDERING_CREATE_INFO,
 		colorAttachmentCount    = 1,
 		pColorAttachmentFormats = &ren.swap_format,
+		depthAttachmentFormat   = ren.depth_format,
 		// pColorAttachmentFormats = &fmt,
 	}
 
@@ -92,6 +106,7 @@ create_pipeline :: proc(ren: ^Renderer) -> (vk.Pipeline, vk.PipelineLayout) {
 	rasci: vk.PipelineRasterizationStateCreateInfo = {
 		sType       = .PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
 		polygonMode = .FILL,
+		// polygonMode = .LINE,
 		lineWidth   = 1.0,
 	}
 

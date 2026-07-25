@@ -1,13 +1,17 @@
 package renderer
 
-import "core:debug/pe"
+import imgui "../../../odin-imgui"
+import "../../../odin-imgui/imgui_impl_sdl3"
+import "../../../odin-imgui/imgui_impl_vulkan"
+import "core:fmt"
+import "core:math/linalg"
 import "core:mem"
 
 import vk "vendor:vulkan"
 
 import "../window/"
 
-draw_frame :: proc(ren: ^Renderer, win: ^window.Window) {
+draw_frame :: proc(ren: ^Renderer, win: ^window.Window, cam: ^Camera, mesh: ^Mesh) {
 	frame := ren.frame_index
 
 	check(vk.WaitForFences(ren.device, 1, &ren.fences[frame], true, max(u64)))
@@ -23,6 +27,8 @@ draw_frame :: proc(ren: ^Renderer, win: ^window.Window) {
 	)
 
 	cmd: vk.CommandBuffer = ren.command_buffers[frame]
+
+	vk.ResetCommandBuffer(cmd, {})
 
 	cbi: vk.CommandBufferBeginInfo = {
 		sType = .COMMAND_BUFFER_BEGIN_INFO,
@@ -89,7 +95,7 @@ draw_frame :: proc(ren: ^Renderer, win: ^window.Window) {
 		layerCount = 1,
 		colorAttachmentCount = 1,
 		pColorAttachments = &cai,
-		// pDepthAttachment = &dai,
+		pDepthAttachment = &dai,
 	}
 
 	vk.CmdBeginRendering(cmd, &ri)
@@ -110,24 +116,63 @@ draw_frame :: proc(ren: ^Renderer, win: ^window.Window) {
 	vk.CmdSetScissor(cmd, 0, 1, &sc)
 
 	vk.CmdBindPipeline(cmd, .GRAPHICS, ren.post_pipeline)
-	// uni: Mesh_Uniforms = {
-	// 	color = {1.0, 1.0, 1.0, 1.0},
-	// 	pos   = {400.0, 300.0, 0.0, 0.0},
-	// }
-
-	mem.copy(ren.test_buff[frame].alloc_info.pMappedData, &ren.test_uni, size_of(ren.test_uni))
 
 
-	vk.CmdPushConstants(
+	// fmt.println("ind offset: ", mesh.index_offset)
+	voffset: vk.DeviceSize = 0
+	vk.CmdBindVertexBuffers(cmd, 0, 1, &mesh.buffer.buff, &voffset)
+
+	vk.CmdBindIndexBuffer(cmd, mesh.buffer.buff, vk.DeviceSize(mesh.index_offset), .UINT32)
+	offset: u32 = 0
+	vk.CmdBindDescriptorSets(
 		cmd,
+		.GRAPHICS,
 		ren.post_pipeline_layout,
-		{.FRAGMENT, .VERTEX},
 		0,
-		size_of(vk.DeviceAddress),
-		&ren.test_buff[frame].address,
+		1,
+		&ren.desc_set_tex,
+		0,
+		&offset,
 	)
 
-	vk.CmdDraw(cmd, 3, 1, 0, 0)
+	for &sm, i in mesh.submeshes {
+
+		// Mesh_Uniforms :: struct {
+		// 	proj:  linalg.Matrix4x4f32,
+		// 	view:  linalg.Matrix4x4f32,
+		// 	model: linalg.Matrix4x4f32,
+		// 	tex:   u32,
+		// }
+
+		scale: linalg.Vector3f32 = {1.00, 1.00, 1.00}
+
+
+		uni: Mesh_Uniforms = {
+			proj  = cam.proj,
+			view  = cam.view,
+			model = linalg.matrix4_scale(scale),
+		}
+		mem.copy(ren.test_buff[frame].alloc_info.pMappedData, &uni, size_of(Mesh_Uniforms))
+
+		pc: Push_Constants = {
+			addr = ren.test_buff[frame].address,
+			tex  = sm.tex_index,
+		}
+
+		vk.CmdPushConstants(
+			cmd,
+			ren.post_pipeline_layout,
+			{.FRAGMENT, .VERTEX},
+			0,
+			size_of(Push_Constants),
+			&pc,
+		)
+
+		vk.CmdDrawIndexed(cmd, u32(sm.index_count), 1, u32(sm.index_offset), 0, 0)
+	}
+
+
+	imgui_impl_vulkan.RenderDrawData(imgui.GetDrawData(), cmd)
 	vk.CmdEndRendering(cmd)
 
 	present_barrier: vk.ImageMemoryBarrier2 = {
