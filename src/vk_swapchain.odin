@@ -1,9 +1,8 @@
-package renderer
+package main
 
-import "../window/"
 import vk "vendor:vulkan"
 
-create_swapchain :: proc(ren: ^Renderer, win: ^window.Window, old: vk.SwapchainKHR = 0) {
+swapchain_create :: proc(ren: ^Renderer, win: ^Window, old: vk.SwapchainKHR = 0) {
 	caps: vk.SurfaceCapabilitiesKHR
 	extent: vk.Extent2D
 	image_count: u32

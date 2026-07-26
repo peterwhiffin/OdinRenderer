@@ -1,4 +1,4 @@
-package renderer
+package main
 
 import vk "vendor:vulkan"
 
@@ -11,11 +11,11 @@ create_pipeline :: proc(ren: ^Renderer) -> (vk.Pipeline, vk.PipelineLayout) {
 		size       = size_of(Push_Constants),
 	}
 
-	layouts: []vk.DescriptorSetLayout = {ren.desc_layout_tex}
+	layouts: []vk.DescriptorSetLayout = {ren.desc_layout_tex, ren.desc_layout_entity}
 
 	lci: vk.PipelineLayoutCreateInfo = {
 		sType                  = .PIPELINE_LAYOUT_CREATE_INFO,
-		setLayoutCount         = u32(len(layouts)),
+		setLayoutCount         = 2,
 		pSetLayouts            = raw_data(layouts),
 		pushConstantRangeCount = 1,
 		pPushConstantRanges    = &pcr,
@@ -93,8 +93,16 @@ create_pipeline :: proc(ren: ^Renderer) -> (vk.Pipeline, vk.PipelineLayout) {
 		// pColorAttachmentFormats = &fmt,
 	}
 
+	//TODO: read the spec on blending
 	cbs: vk.PipelineColorBlendAttachmentState = {
-		colorWriteMask = {.R, .G, .B, .A},
+		blendEnable         = true,
+		srcColorBlendFactor = .SRC_ALPHA,
+		dstColorBlendFactor = .ONE_MINUS_SRC_ALPHA,
+		colorBlendOp        = .ADD,
+		srcAlphaBlendFactor = .SRC_ALPHA,
+		dstAlphaBlendFactor = .ONE_MINUS_SRC_ALPHA,
+		alphaBlendOp        = .ADD,
+		colorWriteMask      = {.R, .G, .B, .A},
 	}
 
 	bci: vk.PipelineColorBlendStateCreateInfo = {

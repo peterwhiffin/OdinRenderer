@@ -5,17 +5,17 @@ import "../../odin-imgui/imgui_impl_sdl3"
 import "../../odin-imgui/imgui_impl_vulkan"
 import "core:fmt"
 import "core:math/linalg"
-import "renderer"
-import sdl "vendor:sdl3"
+import "core:strings"
 import vk "vendor:vulkan"
-import "window"
 
 Editor :: struct {
-	ren:        ^renderer.Renderer,
-	win:        ^window.Window,
-	input:      ^window.Input,
-	res:        ^renderer.Resources,
-	cam:        renderer.Entity,
+	ren:        ^Renderer,
+	win:        ^Window,
+	input:      ^Input,
+	res:        ^Resources,
+	scene:      ^Scene,
+	cam:        Entity,
+	selected:   ^Entity,
 	cam_pitch:  f32,
 	cam_yaw:    f32,
 	move_speed: f32,
@@ -78,6 +78,83 @@ editor_draw_settings :: proc(editor: ^Editor) {
 	imgui.DragFloat3("cam pos", &editor.cam.transform.pos, 0.01, 0.0, 0.0, "%.2f", {.ColorMarkers})
 }
 
+editor_draw_inspector :: proc(editor: ^Editor) {
+	imgui.Begin("Inspector")
+	defer imgui.End()
+
+	if editor.selected != nil {
+		e := editor.selected
+
+		if imgui.IsWindowHovered(0) && editor.input.m1 {
+			imgui.OpenPopup("entityctx")
+		}
+
+		if imgui.BeginPopup("entityctx") {
+
+			if imgui.MenuItem("Add Mesh Renderer", nil, false, .MESH_RENDERER not_in e.flags) {
+				entity_add_mesh(editor.scene, e, editor.ren, editor.res)
+			}
+
+			imgui.EndPopup()
+		}
+
+		if imgui.CollapsingHeader("Transform", {.DefaultOpen, .DrawLinesFull}) {
+			t := &e.transform
+			imgui.DragFloat3("Pos", &t.pos, 0.01, 0.0, 0.0, "%.3f", {.ColorMarkers})
+			imgui.DragFloat3("Rot", &t.rot, 0.01, 0.0, 0.0, "%.3f", {.ColorMarkers})
+			imgui.DragFloat3("Scale", &t.scale, 0.01, 0.0, 0.0, "%.3f", {.ColorMarkers})
+
+			set_position(t, t.pos)
+			set_rotation(t, t.rot)
+			set_scale(t, t.scale)
+		}
+
+		if .MESH_RENDERER in e.flags {
+			mr := &e.mesh_renderer
+
+			if imgui.CollapsingHeader("Mesh Renderer", {.DefaultOpen, .DrawLinesFull}) {
+
+				if imgui.BeginCombo("Mesh", mr.mesh.name, {}) {
+					meshes := &editor.res.meshes
+					for i in 0 ..< meshes.count {
+						if imgui.Selectable(meshes.data[i].name) {
+							mr.mesh = &meshes.data[i]
+						}
+					}
+
+					imgui.EndCombo()
+				}
+
+				imgui.ColorEdit4("Color", &mr.color, {})
+
+			}
+		}
+	}
+}
+
+editor_draw_entities :: proc(editor: ^Editor) {
+	imgui.Begin("Entities")
+	defer imgui.End()
+	s := editor.scene
+	entities := &s.entities
+
+	if imgui.Button(" + ", {imgui.GetContentRegionAvail().x, 0.0}) {
+		scene_get_new_entity(s)
+	}
+
+	imgui.NewLine()
+
+	if imgui.IsWindowHovered() && editor.input.m0 do editor.selected = nil
+
+	for i in 0 ..< s.entities.count {
+		e := &s.entities.data[i]
+		imgui.PushIDPtr(e)
+		selected := editor.selected == e
+		if imgui.Selectable(e.name, selected, {}) do editor.selected = e
+		imgui.PopID()
+	}
+}
+
 
 editor_update :: proc(editor: ^Editor) {
 	update_camera(editor)
@@ -91,6 +168,8 @@ editor_update :: proc(editor: ^Editor) {
 
 	imgui.ShowDemoWindow(&show_demo)
 	editor_draw_settings(editor)
+	editor_draw_entities(editor)
+	editor_draw_inspector(editor)
 	imgui.Render()
 }
 
@@ -153,15 +232,17 @@ imgui_vulkan_callback :: proc "c" (
 
 editor_init :: proc(
 	editor: ^Editor,
-	win: ^window.Window,
-	input: ^window.Input,
-	ren: ^renderer.Renderer,
-	res: ^renderer.Resources,
+	win: ^Window,
+	input: ^Input,
+	ren: ^Renderer,
+	res: ^Resources,
+	scene: ^Scene,
 ) {
 	editor.win = win
 	editor.input = input
 	editor.ren = ren
 	editor.res = res
+	editor.scene = scene
 
 	editor.cam.transform.world_transform = linalg.MATRIX4F32_IDENTITY
 	editor.cam.transform.pos = {0.0, 0.0, -10.0}

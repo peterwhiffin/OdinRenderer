@@ -1,5 +1,6 @@
-package renderer
+package main
 
+import "core:sys/llvm"
 import vk "vendor:vulkan"
 
 create_descriptor_pool :: proc(ren: ^Renderer) {
@@ -21,7 +22,7 @@ create_descriptor_pool :: proc(ren: ^Renderer) {
 }
 
 create_descriptor_layouts :: proc(ren: ^Renderer, res: ^Resources) {
-	bindings: []vk.DescriptorSetLayoutBinding = {
+	tex_bind: []vk.DescriptorSetLayoutBinding = {
 		{
 			binding = 0,
 			descriptorType = .SAMPLED_IMAGE,
@@ -31,16 +32,34 @@ create_descriptor_layouts :: proc(ren: ^Renderer, res: ^Resources) {
 		{binding = 1, descriptorType = .SAMPLER, descriptorCount = 1, stageFlags = {.FRAGMENT}},
 	}
 
-	dci: vk.DescriptorSetLayoutCreateInfo = {
+	tex_ci: vk.DescriptorSetLayoutCreateInfo = {
 		sType        = .DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
 		bindingCount = 2,
-		pBindings    = raw_data(bindings),
+		pBindings    = raw_data(tex_bind),
 	}
 
-	check(vk.CreateDescriptorSetLayout(ren.device, &dci, nil, &ren.desc_layout_tex))
+	check(vk.CreateDescriptorSetLayout(ren.device, &tex_ci, nil, &ren.desc_layout_tex))
+
+
+	entity_bind: []vk.DescriptorSetLayoutBinding = {
+		{
+			binding = 0,
+			descriptorType = .UNIFORM_BUFFER,
+			descriptorCount = 1,
+			stageFlags = {.VERTEX, .FRAGMENT},
+		},
+	}
+
+	entity_ci: vk.DescriptorSetLayoutCreateInfo = {
+		sType        = .DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+		bindingCount = 1,
+		pBindings    = raw_data(entity_bind),
+	}
+
+	check(vk.CreateDescriptorSetLayout(ren.device, &entity_ci, nil, &ren.desc_layout_entity))
 }
 
-create_descriptor_sets :: proc(ren: ^Renderer, res: ^Resources) {
+descriptor_set_create_tex :: proc(ren: ^Renderer, res: ^Resources) {
 	dai: vk.DescriptorSetAllocateInfo = {
 		sType              = .DESCRIPTOR_SET_ALLOCATE_INFO,
 		descriptorPool     = ren.desc_pool,
@@ -86,4 +105,43 @@ create_descriptor_sets :: proc(ren: ^Renderer, res: ^Resources) {
 	}
 
 	vk.UpdateDescriptorSets(ren.device, u32(len(writes)), raw_data(writes), 0, nil)
+}
+
+descriptor_set_create_mesh :: proc(ren: ^Renderer, e: ^Entity) {
+	mr := &e.mesh_renderer
+
+	layouts: [FIF]vk.DescriptorSetLayout
+
+	for &l in layouts {
+		l = ren.desc_layout_entity
+	}
+
+	dai: vk.DescriptorSetAllocateInfo = {
+		sType              = .DESCRIPTOR_SET_ALLOCATE_INFO,
+		descriptorPool     = ren.desc_pool,
+		descriptorSetCount = FIF,
+		pSetLayouts        = &layouts[0],
+	}
+
+	check(vk.AllocateDescriptorSets(ren.device, &dai, raw_data(mr.desc_sets)))
+
+	for set, i in mr.desc_sets {
+		dbi: vk.DescriptorBufferInfo = {
+			buffer = mr.uniform_buffers[i].buff,
+			offset = 0,
+			range  = size_of(Mesh_Uniforms),
+		}
+
+		writes: vk.WriteDescriptorSet = {
+			sType           = .WRITE_DESCRIPTOR_SET,
+			dstSet          = set,
+			dstBinding      = 0,
+			dstArrayElement = 0,
+			descriptorCount = 1,
+			descriptorType  = .UNIFORM_BUFFER,
+			pBufferInfo     = &dbi,
+		}
+
+		vk.UpdateDescriptorSets(ren.device, 1, &writes, 0, nil)
+	}
 }

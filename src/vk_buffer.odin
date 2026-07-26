@@ -1,6 +1,6 @@
-package renderer
+package main
 
-import vma "../../../odin-vma"
+import vma "../../odin-vma"
 import "core:fmt"
 import vk "vendor:vulkan"
 

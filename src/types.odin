@@ -1,6 +1,6 @@
-package renderer
+package main
 
-import vma "../../../odin-vma"
+import vma "../../odin-vma"
 import "core:math/linalg"
 import vk "vendor:vulkan"
 
@@ -8,8 +8,8 @@ ENABLE_VALIDATION :: #config(ENABLE_VALIDATION, ODIN_DEBUG)
 FIF :: 2
 SHADER_PATH :: "shaders/"
 
-SHADER_FULLSCREEN :: #load("../../build/lin/fullscreen.spv")
-SHADER_DEFAULT :: #load("../../build/lin/default.spv")
+SHADER_FULLSCREEN :: #load("../build/lin/fullscreen.spv")
+SHADER_DEFAULT :: #load("../build/lin/default.spv")
 
 Transform :: struct {
 	pos:             [3]f32,
@@ -35,8 +35,15 @@ Entity_Flag :: enum {
 	CAMERA,
 }
 
+Mesh_Uniforms :: struct {
+	model:         linalg.Matrix4x4f32,
+	normal_matrix: linalg.Matrix4x4f32,
+	color:         [4]f32,
+}
+
 Entity :: struct {
-	flags:         Entity_Flag,
+	name:          cstring,
+	flags:         Entity_Flags,
 	transform:     Transform,
 	mesh_renderer: Mesh_Renderer,
 	camera:        Camera,
@@ -59,25 +66,27 @@ Vertex :: struct {
 }
 
 Push_Constants :: struct {
-	addr: vk.DeviceAddress,
-	tex:  u32,
+	addr:      vk.DeviceAddress,
+	tex_index: u32,
 }
 
-Mesh_Uniforms :: struct {
-	proj:  linalg.Matrix4x4f32,
-	view:  linalg.Matrix4x4f32,
-	model: linalg.Matrix4x4f32,
+Frame_Uniforms :: struct {
+	proj: linalg.Matrix4x4f32,
+	view: linalg.Matrix4x4f32,
 }
 
 Submesh :: struct {
 	index_offset: uint,
 	index_count:  uint,
 	tex_index:    u32,
-	// tex:          ^Image,
+}
+
+Scene :: struct {
+	entities: Array(Entity),
 }
 
 Mesh :: struct {
-	name:         string,
+	name:         cstring,
 	vertex_count: u64,
 	index_count:  u64,
 	index_offset: u64,
@@ -98,6 +107,7 @@ Mesh_Renderer :: struct {
 	uniform_buffers: []Buffer,
 	desc_sets:       []vk.DescriptorSet,
 	material:        u32,
+	color:           [4]f32,
 }
 
 Image :: struct {
@@ -122,6 +132,7 @@ Renderer :: struct {
 	command_buffers:      []vk.CommandBuffer,
 	command_pool:         vk.CommandPool,
 	desc_pool:            vk.DescriptorPool,
+	desc_layout_entity:   vk.DescriptorSetLayout,
 	desc_layout_tex:      vk.DescriptorSetLayout,
 	desc_set_tex:         vk.DescriptorSet,
 	sampler:              vk.Sampler,
@@ -137,6 +148,5 @@ Renderer :: struct {
 	frame_index:          u32,
 	image_index:          u32,
 	test_buff:            []Buffer,
-	// test_uni:             Mesh_Uniforms,
 	entities:             Array(Entity),
 }

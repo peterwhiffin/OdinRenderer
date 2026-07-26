@@ -1,6 +1,6 @@
-package renderer
+package main
 
-import vma "../../../odin-vma"
+import vma "../../odin-vma"
 import vk "vendor:vulkan"
 
 create_image :: proc(

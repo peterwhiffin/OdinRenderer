@@ -7,12 +7,12 @@ struct VSInput {
 struct per_frame_uniforms {
 	float4x4 proj;
 	float4x4 view;
-	float4x4 model;
 };
 
 struct entity {
 	float4x4 model;
 	float4x4 normal_matrix;
+	float4 color;
 };
 
 struct VSOutput {
@@ -40,6 +40,8 @@ Texture2D<float4> tex[];
 [[vk::binding(1, 0)]]
 SamplerState sampler;
 
+[[vk::binding(0, 1)]]
+ConstantBuffer<entity> ebuf;
 // [[vk::binding(1, 0)]]
 // ConstantBuffer<material> materials[];
 
@@ -51,7 +53,8 @@ VSOutput vertMain(VSInput input, uniform push_const pc)
 {
 	per_frame_uniforms *pfu = pc.pfu;
 	VSOutput output;
-	output.Pos = mul(pfu.proj, mul(pfu.view, mul(pfu.model, float4(input.Pos.xyz, 1.0))));
+	// output.Pos = mul(pfu.proj, mul(pfu.view, mul(ebuf.model, float4(input.Pos.xyz, 1.0))));
+	output.Pos = mul(pfu.proj, mul(pfu.view, mul(ebuf.model, float4(input.Pos.xyz, 1.0))));
 	output.Norm = normalize(input.norm);
 	output.UV = input.UV;
 	output.light_dir = float3(0.2, -1.0, 0.0);
@@ -73,6 +76,7 @@ float4 fragMain(VSOutput input, uniform push_const pc)
 	if (diffuse_color.a < 0.3f)
 		discard;
 
+	diffuse_color *= ebuf.color;
 	float3 ambient = mul(diffuse_color.rgb, 0.02);
 	float3 final_color = float3(0.0);
 
@@ -92,5 +96,5 @@ float4 fragMain(VSOutput input, uniform push_const pc)
 	//
 	// final_color = diffuse * diffuse_color.rgb + specular;
 
-	return float4(final_color.rgb, 1.0);
+	return float4(final_color.rgb, ebuf.color.a);
 }

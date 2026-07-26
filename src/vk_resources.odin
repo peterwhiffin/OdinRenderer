@@ -1,6 +1,6 @@
-package renderer
+package main
 
-import vma "../../../odin-vma"
+import vma "../../odin-vma"
 import "core:c"
 import "core:fmt"
 import "core:log"
@@ -13,42 +13,6 @@ import vk "vendor:vulkan"
 import "core:strings"
 import "vendor:cgltf"
 
-begin_one_time_cmd :: proc(ren: ^Renderer) -> vk.CommandBuffer {
-	cmd: vk.CommandBuffer
-
-	cai: vk.CommandBufferAllocateInfo = {
-		sType              = .COMMAND_BUFFER_ALLOCATE_INFO,
-		commandPool        = ren.command_pool,
-		level              = .PRIMARY,
-		commandBufferCount = 1,
-	}
-
-	check(vk.AllocateCommandBuffers(ren.device, &cai, &cmd))
-
-	cbi: vk.CommandBufferBeginInfo = {
-		sType = .COMMAND_BUFFER_BEGIN_INFO,
-		flags = {.ONE_TIME_SUBMIT},
-	}
-
-	check(vk.BeginCommandBuffer(cmd, &cbi))
-
-	return cmd
-}
-
-end_one_time_cmd :: proc(ren: ^Renderer, cmd: vk.CommandBuffer) {
-	cmd := cmd
-	check(vk.EndCommandBuffer(cmd))
-
-	si: vk.SubmitInfo = {
-		sType              = .SUBMIT_INFO,
-		commandBufferCount = 1,
-		pCommandBuffers    = &cmd,
-	}
-
-	vk.QueueSubmit(ren.gfx_q, 1, &si, 0)
-	vk.QueueWaitIdle(ren.gfx_q)
-	vk.FreeCommandBuffers(ren.device, ren.command_pool, 1, &cmd)
-}
 
 load_image :: proc(ren: ^Renderer, res: ^Resources, new_img: ^Image, path: cstring) {
 	w, h, ch: c.int
@@ -148,8 +112,14 @@ find_accessor :: proc(
 	return false, nil
 }
 
-
-load_gltf :: proc(ren: ^Renderer, res: ^Resources, new_mesh: ^Mesh, path: cstring) -> bool {
+//TODO: Apply transforms from nodes
+load_gltf :: proc(
+	ren: ^Renderer,
+	res: ^Resources,
+	new_mesh: ^Mesh,
+	scale: f32,
+	path: cstring,
+) -> bool {
 	opt: cgltf.options
 	data: ^cgltf.data
 	result: cgltf.result
@@ -170,10 +140,12 @@ load_gltf :: proc(ren: ^Renderer, res: ^Resources, new_mesh: ^Mesh, path: cstrin
 
 	odin_str := string(path)
 	dir, file := filepath.split(odin_str)
-	new_mesh.name = strings.clone(file)
+	new_mesh.name = strings.clone_to_cstring(file)
 
 	image_indices := make(map[^cgltf.image]u32)
 	defer delete(image_indices)
+
+	image_indices[nil] = 0
 
 	for &img, i in data.images {
 		image_indices[&img] = u32(i)
@@ -201,13 +173,19 @@ load_gltf :: proc(ren: ^Renderer, res: ^Resources, new_mesh: ^Mesh, path: cstrin
 
 			if ok, pos_acc = find_accessor(&prim, .position, 0); !ok do return fail("Failed to find position accessor for mesh %s", path)
 			if ok, norm_acc = find_accessor(&prim, .normal, 0); !ok do return fail("Failed to find normal accessor for mesh %s", path)
-			if ok, uv_acc = find_accessor(&prim, .texcoord, 0); !ok do return fail("Failed to find uv accessor for mesh %s", path)
+			if ok, uv_acc = find_accessor(&prim, .texcoord, 0); !ok do fail("Failed to find uv accessor for mesh %s", path)
 
 			for i in 0 ..< pos_acc.count {
 				v: Vertex
 				if ok = cgltf.accessor_read_float(pos_acc, i, &v.pos[0], 3); !ok do return fail("Failed to read position floats from accessor: %s", path)
 				if ok = cgltf.accessor_read_float(norm_acc, i, &v.norm[0], 3); !ok do return fail("Failed to read normal floats from accessor: %s", path)
-				if ok = cgltf.accessor_read_float(uv_acc, i, &v.uv[0], 2); !ok do return fail("Failed to read uv floats from accessor: %s", path)
+
+				if uv_acc != nil {
+					if ok = cgltf.accessor_read_float(uv_acc, i, &v.uv[0], 2); !ok {
+					}
+				}
+
+				v.pos *= scale
 				append(&verts, v)
 			}
 
@@ -217,10 +195,18 @@ load_gltf :: proc(ren: ^Renderer, res: ^Resources, new_mesh: ^Mesh, path: cstrin
 				append(&indices, u32(index))
 			}
 
-			img := prim.material.pbr_metallic_roughness.base_color_texture.texture.image_
+
+			img: ^cgltf.image = nil
+
+			//TODO: Query textures correctly. no idea
+			if prim.material.has_pbr_metallic_roughness {
+				if prim.material.pbr_metallic_roughness.base_color_texture.texture != nil {
+					img = prim.material.pbr_metallic_roughness.base_color_texture.texture.image_
+				}
+			}
 
 			sm: Submesh = {
-				tex_index    = image_indices[img],
+				tex_index    = image_indices[img] + tex_offset,
 				index_offset = ind_offset,
 				index_count  = prim.indices.count,
 			}
@@ -280,7 +266,7 @@ resources_init :: proc(res: ^Resources) {
 	res.images.data = make([]Image, 500)
 }
 
-load_model :: proc(ren: ^Renderer, res: ^Resources, path: cstring) {
+load_model :: proc(ren: ^Renderer, res: ^Resources, scale: f32, path: cstring) {
 	mesh := get_new_mesh(res)
-	load_gltf(ren, res, mesh, path)
+	load_gltf(ren, res, mesh, scale, path)
 }

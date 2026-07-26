@@ -1,13 +1,48 @@
-package renderer
+package main
 
 import "core:log"
 import "core:slice"
 
-import vma "../../../odin-vma"
+import vma "../../odin-vma"
 import sdl "vendor:sdl3"
 import vk "vendor:vulkan"
 
-import "../window/"
+begin_one_time_cmd :: proc(ren: ^Renderer) -> vk.CommandBuffer {
+	cmd: vk.CommandBuffer
+
+	cai: vk.CommandBufferAllocateInfo = {
+		sType              = .COMMAND_BUFFER_ALLOCATE_INFO,
+		commandPool        = ren.command_pool,
+		level              = .PRIMARY,
+		commandBufferCount = 1,
+	}
+
+	check(vk.AllocateCommandBuffers(ren.device, &cai, &cmd))
+
+	cbi: vk.CommandBufferBeginInfo = {
+		sType = .COMMAND_BUFFER_BEGIN_INFO,
+		flags = {.ONE_TIME_SUBMIT},
+	}
+
+	check(vk.BeginCommandBuffer(cmd, &cbi))
+
+	return cmd
+}
+
+end_one_time_cmd :: proc(ren: ^Renderer, cmd: vk.CommandBuffer) {
+	cmd := cmd
+	check(vk.EndCommandBuffer(cmd))
+
+	si: vk.SubmitInfo = {
+		sType              = .SUBMIT_INFO,
+		commandBufferCount = 1,
+		pCommandBuffers    = &cmd,
+	}
+
+	vk.QueueSubmit(ren.gfx_q, 1, &si, 0)
+	vk.QueueWaitIdle(ren.gfx_q)
+	vk.FreeCommandBuffers(ren.device, ren.command_pool, 1, &cmd)
+}
 
 create_intance :: proc(ren: ^Renderer) {
 	sdl_ext_count: u32
@@ -81,7 +116,7 @@ create_device :: proc(ren: ^Renderer) {
 
 	for i in 0 ..< family_count {
 		if .GRAPHICS in families[i].queueFlags {
-			window.check(sdl.Vulkan_GetPresentationSupport(ren.instance, ren.physical, i))
+			sdl_check(sdl.Vulkan_GetPresentationSupport(ren.instance, ren.physical, i))
 			ren.gfx_q_family = i
 		}
 	}
@@ -149,14 +184,14 @@ create_allocator :: proc(ren: ^Renderer) {
 	check(vma.CreateAllocator(aci, &ren.allocator), "Creating VMA Allocator")
 }
 
-create_surface :: proc(ren: ^Renderer, win: ^window.Window) {
+create_surface :: proc(ren: ^Renderer, win: ^Window) {
 	w, h: i32
 
-	window.check(
+	sdl_check(
 		sdl.Vulkan_CreateSurface(win.sdl_win, ren.instance, nil, &ren.surface),
 		"Creating Vulkan Surface",
 	)
-	window.check(sdl.GetWindowSize(win.sdl_win, &w, &h))
+	sdl_check(sdl.GetWindowSize(win.sdl_win, &w, &h))
 	win.w, win.h = u32(w), u32(h)
 }
 
@@ -221,7 +256,7 @@ create_shader_modules :: proc(ren: ^Renderer, code: []byte) -> vk.ShaderModule {
 	return module
 }
 
-init :: proc(ren: ^Renderer, win: ^window.Window, res: ^Resources) {
+renderer_init :: proc(ren: ^Renderer, win: ^Window, res: ^Resources) {
 	vk.load_proc_addresses_global(rawptr(sdl.Vulkan_GetVkGetInstanceProcAddr()))
 	assert(vk.CreateInstance != nil, "Vulkan Global Function Pointers Not Loaded")
 
@@ -238,16 +273,17 @@ init :: proc(ren: ^Renderer, win: ^window.Window, res: ^Resources) {
 
 	create_allocator(ren)
 	create_surface(ren, win)
-	create_swapchain(ren, win)
+	swapchain_create(ren, win)
 	create_depth_image(ren, win.w, win.h)
 	create_sync_primitives(ren)
 	create_command_buffer(ren)
 	create_sampler(ren)
-	// load_model(ren, res, "../glTF-Sample-Assets/Models/DamagedHelmet/glTF/DamagedHelmet.gltf")
-	load_model(ren, res, "../glTF-Sample-Assets/Models/Sponza/glTF/Sponza.gltf")
+	load_model(ren, res, 0.01, "../glTF-Sample-Assets/Models/Sponza/glTF/Sponza.gltf")
+	load_model(ren, res, 1.0, "../glTF-Sample-Assets/Models/DamagedHelmet/glTF/DamagedHelmet.gltf")
+	load_model(ren, res, 1.0, "../glTF-Sample-Assets/Models/VirtualCity/glTF/VirtualCity.gltf")
 	create_descriptor_pool(ren)
 	create_descriptor_layouts(ren, res)
-	create_descriptor_sets(ren, res)
+	descriptor_set_create_tex(ren, res)
 	// ren.post_shader = create_shader_modules(ren, SHADER_FULLSCREEN)
 	ren.default_shader = create_shader_modules(ren, SHADER_DEFAULT)
 	ren.post_pipeline, ren.post_pipeline_layout = create_pipeline(ren)

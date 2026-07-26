@@ -1,8 +1,8 @@
-package window
+package main
 
-import imgui "../../../odin-imgui"
-import "../../../odin-imgui/imgui_impl_sdl3"
-import "../../../odin-imgui/imgui_impl_vulkan"
+import imgui "../../odin-imgui"
+import "../../odin-imgui/imgui_impl_sdl3"
+import "../../odin-imgui/imgui_impl_vulkan"
 import "core:fmt"
 import "core:log"
 
@@ -28,10 +28,11 @@ Input :: struct {
 	relative_mouse_pos: [2]f32,
 	mouse_delta:        [2]f32,
 	wasd:               [2]f32,
+	m0:                 bool,
 	m1:                 bool,
 }
 
-check :: proc(result: bool, msg: cstring = nil) {
+sdl_check :: proc(result: bool, msg: cstring = nil) {
 	if !result {
 		log.error("SDL Call Failed!")
 		log.errorf("%s%s", "SDL::", msg)
@@ -40,11 +41,11 @@ check :: proc(result: bool, msg: cstring = nil) {
 	}
 }
 
-init :: proc(win: ^Window, input: ^Input) {
-	check(sdl.Init(sdl.INIT_VIDEO), "Initializing")
+window_init :: proc(win: ^Window, input: ^Input) {
+	sdl_check(sdl.Init(sdl.INIT_VIDEO), "Initializing")
 	input.sdl_keys = sdl.GetKeyboardState(nil)
 	input.lock_mouse = sdl.SetWindowRelativeMouseMode
-	check(sdl.Vulkan_LoadLibrary(nil), "Loading Vulkan Library")
+	sdl_check(sdl.Vulkan_LoadLibrary(nil), "Loading Vulkan Library")
 	win.w = 800
 	win.h = 600
 
@@ -52,7 +53,7 @@ init :: proc(win: ^Window, input: ^Input) {
 	flags: sdl.WindowFlags = {.VULKAN}
 	win.sdl_win = sdl.CreateWindow("Odin Engine", i32(win.w), i32(win.h), flags)
 
-	check(win.sdl_win != nil, "Creating Window")
+	sdl_check(win.sdl_win != nil, "Creating Window")
 
 	win.target_fps = 144
 	win.target_time = 1_000_000_000 / u64(win.target_fps)
@@ -63,6 +64,7 @@ input_update :: proc(input: ^Input) {
 	buttons := sdl.GetMouseState(&input.relative_mouse_pos.x, &input.relative_mouse_pos.y)
 
 	input.m1 = sdl.MouseButtonFlag.RIGHT in buttons
+	input.m0 = sdl.MouseButtonFlag.LEFT in buttons
 
 	W: f32 = input.sdl_keys[sdl.Scancode.W] ? 1.0 : 0.0
 	A: f32 = input.sdl_keys[sdl.Scancode.A] ? 1.0 : 0.0
