@@ -3,6 +3,7 @@ package main
 import imgui "../../odin-imgui"
 import "../../odin-imgui/imgui_impl_sdl3"
 import "../../odin-imgui/imgui_impl_vulkan"
+import "core:c"
 import "core:fmt"
 import "core:log"
 
@@ -49,8 +50,8 @@ window_init :: proc(win: ^Window, input: ^Input) {
 	win.w = 800
 	win.h = 600
 
-	// flags: sdl.WindowFlags = {.VULKAN, .RESIZABLE}
-	flags: sdl.WindowFlags = {.VULKAN}
+	flags: sdl.WindowFlags = {.VULKAN, .RESIZABLE}
+	// flags: sdl.WindowFlags = {.VULKAN}
 	win.sdl_win = sdl.CreateWindow("Odin Engine", i32(win.w), i32(win.h), flags)
 
 	sdl_check(win.sdl_win != nil, "Creating Window")
@@ -74,7 +75,7 @@ input_update :: proc(input: ^Input) {
 	input.wasd = {D - A, W - S}
 }
 
-poll_events :: proc(win: ^Window, input: ^Input) {
+poll_events :: proc(ren: ^Renderer, win: ^Window, input: ^Input, cam: ^Camera) {
 	event: sdl.Event
 
 	input.mouse_delta.x = 0
@@ -90,6 +91,12 @@ poll_events :: proc(win: ^Window, input: ^Input) {
 		case .MOUSE_MOTION:
 			input.mouse_delta.x += event.motion.xrel
 			input.mouse_delta.y += event.motion.yrel
+		case .WINDOW_RESIZED:
+			w, h: c.int
+			sdl.GetWindowSize(win.sdl_win, &w, &h)
+			// win.w, win.h = u32(w), u32(h)
+			cam.aspect = f32(w) / f32(h)
+			ren.update_swap = true
 		}
 	}
 }

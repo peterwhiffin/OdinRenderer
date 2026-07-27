@@ -1,6 +1,62 @@
 package main
 
+import vma "../../odin-vma"
+import "core:c"
+import "core:log"
+import sdl "vendor:sdl3"
 import vk "vendor:vulkan"
+
+swapchain_check :: proc(ren: ^Renderer, result: vk.Result) {
+	if result < .SUCCESS {
+		if (result == .ERROR_OUT_OF_DATE_KHR) {
+			ren.update_swap = true
+			return
+		}
+
+		log.panic("Swapchain Error: ", result)
+	} else {
+		// log.warnf("Swapchain result: ", result)
+	}
+}
+
+swapchain_update :: proc(ren: ^Renderer, win: ^Window) {
+	if !ren.update_swap do return
+
+	ren.update_swap = false
+	w, h: c.int
+	sdl.GetWindowSize(win.sdl_win, &w, &h)
+	win.w, win.h = u32(w), u32(h)
+
+	vk.DeviceWaitIdle(ren.device)
+	old_swap := ren.swapchain
+	old_img := ren.swap_images
+
+	swapchain_create(ren, win, old_swap)
+
+	for &sem in ren.semaphore_render {
+		vk.DestroySemaphore(ren.device, sem, nil)
+	}
+
+	sci: vk.SemaphoreCreateInfo = {
+		sType = .SEMAPHORE_CREATE_INFO,
+	}
+
+	for &sem in ren.semaphore_render {
+		vk.CreateSemaphore(ren.device, &sci, nil, &sem)
+	}
+
+	vk.DestroySwapchainKHR(ren.device, old_swap, nil)
+	for img in old_img {
+		vk.DestroyImageView(ren.device, img.view, nil)
+	}
+
+	vma.DestroyImage(ren.allocator, ren.depth_image.image, ren.depth_image.allocation)
+	vk.DestroyImageView(ren.device, ren.depth_image.view, nil)
+
+	create_depth_image(ren, win.w, win.h)
+
+
+}
 
 swapchain_create :: proc(ren: ^Renderer, win: ^Window, old: vk.SwapchainKHR = 0) {
 	caps: vk.SurfaceCapabilitiesKHR

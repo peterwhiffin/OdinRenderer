@@ -16,13 +16,17 @@ draw_frame :: proc(ren: ^Renderer, win: ^Window, cam: ^Camera, s: ^Scene) {
 	check(vk.WaitForFences(ren.device, 1, &ren.fences[frame], true, max(u64)))
 	check(vk.ResetFences(ren.device, 1, &ren.fences[frame]))
 
-	vk.AcquireNextImageKHR(
-		ren.device,
-		ren.swapchain,
-		max(u64),
-		ren.semaphore_image[frame],
-		0,
-		&ren.image_index,
+
+	swapchain_check(
+		ren,
+		vk.AcquireNextImageKHR(
+			ren.device,
+			ren.swapchain,
+			max(u64),
+			ren.semaphore_image[frame],
+			0,
+			&ren.image_index,
+		),
 	)
 
 	cmd: vk.CommandBuffer = ren.command_buffers[frame]
@@ -234,5 +238,5 @@ draw_frame :: proc(ren: ^Renderer, win: ^Window, cam: ^Camera, s: ^Scene) {
 		pImageIndices      = &ren.image_index,
 	}
 
-	check(vk.QueuePresentKHR(ren.gfx_q, &pi))
+	swapchain_check(ren, vk.QueuePresentKHR(ren.gfx_q, &pi))
 }

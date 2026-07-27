@@ -1,6 +1,7 @@
 package main
 
 import "core:log"
+import "core:math"
 import "core:slice"
 
 import vma "../../odin-vma"
@@ -256,6 +257,13 @@ create_shader_modules :: proc(ren: ^Renderer, code: []byte) -> vk.ShaderModule {
 	return module
 }
 
+load_default_textures :: proc(ren: ^Renderer, res: ^Resources) {
+	img := get_new_image(res)
+	white_color: [4]u8 = {255, 255, 255, 255}
+
+	load_image(ren, res, img, nil, &white_color[0], 1, 1, 4)
+}
+
 renderer_init :: proc(ren: ^Renderer, win: ^Window, res: ^Resources) {
 	vk.load_proc_addresses_global(rawptr(sdl.Vulkan_GetVkGetInstanceProcAddr()))
 	assert(vk.CreateInstance != nil, "Vulkan Global Function Pointers Not Loaded")
@@ -278,9 +286,12 @@ renderer_init :: proc(ren: ^Renderer, win: ^Window, res: ^Resources) {
 	create_sync_primitives(ren)
 	create_command_buffer(ren)
 	create_sampler(ren)
+	load_default_textures(ren, res)
+	load_model(ren, res, 1.0, "assets/models/primitives/cube.gltf")
+	load_model(ren, res, 1.0, "assets/models/primitives/sphere.gltf")
+	load_model(ren, res, 1.0, "assets/models/primitives/capsule.gltf")
 	load_model(ren, res, 0.01, "../glTF-Sample-Assets/Models/Sponza/glTF/Sponza.gltf")
 	load_model(ren, res, 1.0, "../glTF-Sample-Assets/Models/DamagedHelmet/glTF/DamagedHelmet.gltf")
-	load_model(ren, res, 1.0, "../glTF-Sample-Assets/Models/VirtualCity/glTF/VirtualCity.gltf")
 	create_descriptor_pool(ren)
 	create_descriptor_layouts(ren, res)
 	descriptor_set_create_tex(ren, res)

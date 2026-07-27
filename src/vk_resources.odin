@@ -14,14 +14,33 @@ import "core:strings"
 import "vendor:cgltf"
 
 
-load_image :: proc(ren: ^Renderer, res: ^Resources, new_img: ^Image, path: cstring) {
-	w, h, ch: c.int
+load_image :: proc(
+	ren: ^Renderer,
+	res: ^Resources,
+	new_img: ^Image,
+	path: cstring,
+	d: [^]byte = nil,
+	w: c.int = 0,
+	h: c.int = 0,
+	ch: c.int = 0,
+) {
+	// w, h, ch: c.int
+	d := d
+	w := w
+	h := h
+	ch := ch
 
-	d := stbi.load(path, &w, &h, &ch, 4)
+	loaded := false
+
+	if d == nil {
+		d = stbi.load(path, &w, &h, &ch, 4)
+		loaded = true
+	}
 
 	if d == nil {
 		log.errorf("Failed to load image: %s", path)
 	}
+
 
 	size := vk.DeviceSize(w * h * 4)
 	mip_levels := math.floor(math.log2(max(f32(w), f32(h)))) + 1
@@ -34,7 +53,9 @@ load_image :: proc(ren: ^Renderer, res: ^Resources, new_img: ^Image, path: cstri
 	defer vma.DestroyBuffer(ren.allocator, staging_buf.buff, staging_buf.allocation)
 
 	mem.copy(staging_buf.alloc_info.pMappedData, d, int(size))
-	stbi.image_free(d)
+	if loaded {
+		stbi.image_free(d)
+	}
 
 	new_img^ = create_image(
 		ren,
@@ -129,10 +150,17 @@ load_gltf :: proc(
 	prim_count: u64
 	tex_offset: u32 = res.images.count
 
-	data, result = cgltf.parse_file(opt, path)
+	if data, result = cgltf.parse_file(opt, path); result != .success {
+		log.errorf("Failed to Parse File: %s", path)
+		cgltf.free(data)
+		return false
+	}
 
-	if result != .success do return fail("CGLTF::Failed to Parse File: %s", path)
-	if cgltf.validate(data) != .success do return fail("CGLTF::Failed to Validate Data: %s", path)
+	if cgltf.validate(data) != .success {
+		log.errorf("CGLTF::Failed to Validate Data: %s", path)
+		cgltf.free(data)
+		return false
+	}
 
 	new_mesh.submeshes = make([dynamic]Submesh)
 
@@ -163,30 +191,30 @@ load_gltf :: proc(
 
 	vert_offset, ind_offset: uint
 
-
 	for &mesh in data.meshes {
 		for &prim in mesh.primitives {
-			ok: b32
 			pos_acc: ^cgltf.accessor
-			norm_acc: ^cgltf.accessor
-			uv_acc: ^cgltf.accessor
+			pos_ok: b32
+			v: Vertex
 
-			if ok, pos_acc = find_accessor(&prim, .position, 0); !ok do return fail("Failed to find position accessor for mesh %s", path)
-			if ok, norm_acc = find_accessor(&prim, .normal, 0); !ok do return fail("Failed to find normal accessor for mesh %s", path)
-			if ok, uv_acc = find_accessor(&prim, .texcoord, 0); !ok do fail("Failed to find uv accessor for mesh %s", path)
+			if pos_ok, pos_acc = find_accessor(&prim, .position, 0); pos_ok {
+				norm_ok, norm_acc := find_accessor(&prim, .normal, 0)
+				uv_ok, uv_acc := find_accessor(&prim, .texcoord, 0)
 
-			for i in 0 ..< pos_acc.count {
-				v: Vertex
-				if ok = cgltf.accessor_read_float(pos_acc, i, &v.pos[0], 3); !ok do return fail("Failed to read position floats from accessor: %s", path)
-				if ok = cgltf.accessor_read_float(norm_acc, i, &v.norm[0], 3); !ok do return fail("Failed to read normal floats from accessor: %s", path)
+				for i in 0 ..< pos_acc.count {
+					if ok := cgltf.accessor_read_float(pos_acc, i, &v.pos[0], 3); !ok do log.warnf("Failed to read position: %s", path)
 
-				if uv_acc != nil {
-					if ok = cgltf.accessor_read_float(uv_acc, i, &v.uv[0], 2); !ok {
+					if norm_ok {
+						if ok := cgltf.accessor_read_float(norm_acc, i, &v.norm[0], 3); !ok do log.warnf("Failed to read normal: %s", path)
 					}
-				}
 
-				v.pos *= scale
-				append(&verts, v)
+					if uv_ok {
+						if ok := cgltf.accessor_read_float(uv_acc, i, &v.uv[0], 2); !ok do log.warnf("Failed to read UV: %s", path)
+					}
+
+					v.pos *= scale
+					append(&verts, v)
+				}
 			}
 
 			for i in 0 ..< prim.indices.count {
@@ -197,16 +225,22 @@ load_gltf :: proc(
 
 
 			img: ^cgltf.image = nil
+			tex_index: u32 = 0
 
 			//TODO: Query textures correctly. no idea
-			if prim.material.has_pbr_metallic_roughness {
-				if prim.material.pbr_metallic_roughness.base_color_texture.texture != nil {
-					img = prim.material.pbr_metallic_roughness.base_color_texture.texture.image_
+			if prim.material != nil {
+				if prim.material.has_pbr_metallic_roughness {
+					if prim.material.pbr_metallic_roughness.base_color_texture.texture != nil {
+						img =
+							prim.material.pbr_metallic_roughness.base_color_texture.texture.image_
+						tex_index = image_indices[img] + tex_offset
+					}
 				}
 			}
 
+
 			sm: Submesh = {
-				tex_index    = image_indices[img] + tex_offset,
+				tex_index    = tex_index,
 				index_offset = ind_offset,
 				index_count  = prim.indices.count,
 			}
@@ -241,11 +275,6 @@ load_gltf :: proc(
 	// mem.copy(rawptr(uintptr(mdata) + uintptr(vsize)), raw_data(indices), isize)
 
 	return true
-
-	fail :: proc(msg: string, args: ..any) -> bool {
-		log.errorf(msg, args)
-		return false
-	}
 }
 
 
@@ -268,5 +297,11 @@ resources_init :: proc(res: ^Resources) {
 
 load_model :: proc(ren: ^Renderer, res: ^Resources, scale: f32, path: cstring) {
 	mesh := get_new_mesh(res)
-	load_gltf(ren, res, mesh, scale, path)
+	spath := string(path)
+	ext := filepath.ext(spath)
+
+	if ext == ".gltf" {
+		load_gltf(ren, res, mesh, scale, path)
+	}
+
 }

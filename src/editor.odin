@@ -6,6 +6,7 @@ import "../../odin-imgui/imgui_impl_vulkan"
 import "core:fmt"
 import "core:math/linalg"
 import "core:strings"
+import b3 "vendor:box3d"
 import vk "vendor:vulkan"
 
 Editor :: struct {
@@ -14,6 +15,7 @@ Editor :: struct {
 	input:      ^Input,
 	res:        ^Resources,
 	scene:      ^Scene,
+	physics:    ^Physics,
 	cam:        Entity,
 	selected:   ^Entity,
 	cam_pitch:  f32,
@@ -40,7 +42,8 @@ update_camera :: proc(editor: ^Editor) {
 
 		rot: [3]f32 = {editor.cam_pitch, editor.cam_yaw, 0.0}
 
-		set_rotation(t, rot)
+		// set_rotation(t, rot)
+		set_euler_angles(t, rot)
 
 		forward := get_forward(t)
 		right := get_right(t)
@@ -95,18 +98,42 @@ editor_draw_inspector :: proc(editor: ^Editor) {
 				entity_add_mesh(editor.scene, e, editor.ren, editor.res)
 			}
 
+			if imgui.MenuItem("Add Rigidbody", nil, false, .RIGIDBODY not_in e.flags) {
+				entity_add_rigidbody(editor.scene, editor.physics, e)
+			}
+
 			imgui.EndPopup()
 		}
 
 		if imgui.CollapsingHeader("Transform", {.DefaultOpen, .DrawLinesFull}) {
 			t := &e.transform
 			imgui.DragFloat3("Pos", &t.pos, 0.01, 0.0, 0.0, "%.3f", {.ColorMarkers})
-			imgui.DragFloat3("Rot", &t.rot, 0.01, 0.0, 0.0, "%.3f", {.ColorMarkers})
+			imgui.DragFloat3("Rot", &t.euler_angles, 0.01, 0.0, 0.0, "%.3f", {.ColorMarkers})
 			imgui.DragFloat3("Scale", &t.scale, 0.01, 0.0, 0.0, "%.3f", {.ColorMarkers})
 
 			set_position(t, t.pos)
-			set_rotation(t, t.rot)
+			set_euler_angles(t, t.euler_angles)
 			set_scale(t, t.scale)
+
+			parent_name: cstring = "none"
+			if e.transform.parent != nil {
+				parent_name = e.transform.parent.entity.name
+			}
+
+			if imgui.BeginCombo("Parent", parent_name, {}) {
+				for i in 0 ..< editor.scene.entities.count {
+					ent := &editor.scene.entities.data[i]
+					if ent != e {
+						imgui.PushIDPtr(ent)
+						if (imgui.Selectable(ent.name)) {
+							e.transform.parent = &ent.transform
+							append(&ent.transform.children, &e.transform)
+						}
+						imgui.PopID()
+					}
+				}
+				imgui.EndCombo()
+			}
 		}
 
 		if .MESH_RENDERER in e.flags {
@@ -126,6 +153,49 @@ editor_draw_inspector :: proc(editor: ^Editor) {
 				}
 
 				imgui.ColorEdit4("Color", &mr.color, {})
+
+			}
+		}
+
+		if .RIGIDBODY in e.flags {
+			rb := &e.rigidbody
+
+			if imgui.CollapsingHeader("Rigidbody", {.DefaultOpen, .DrawLinesFull}) {
+
+				type_str: cstring = "static"
+
+				type := b3.Body_GetType(rb.body_id)
+
+				if type == .kinematicBody {
+					type_str = "kinematic"
+				} else if type == .dynamicBody {
+					type_str = "dynamic"
+				}
+
+
+				if imgui.BeginCombo("Type", type_str, {}) {
+
+					if type != .staticBody {
+						if imgui.Selectable("static") {
+							b3.Body_SetType(rb.body_id, .staticBody)
+						}
+					}
+
+					if type != .kinematicBody {
+						if imgui.Selectable("kinematic") {
+							b3.Body_SetType(rb.body_id, .kinematicBody)
+						}
+					}
+
+
+					if type != .dynamicBody {
+						if imgui.Selectable("dynamic") {
+							b3.Body_SetType(rb.body_id, .dynamicBody)
+						}
+					}
+					imgui.EndCombo()
+				}
+
 
 			}
 		}
@@ -236,17 +306,19 @@ editor_init :: proc(
 	input: ^Input,
 	ren: ^Renderer,
 	res: ^Resources,
+	phys: ^Physics,
 	scene: ^Scene,
 ) {
 	editor.win = win
 	editor.input = input
 	editor.ren = ren
 	editor.res = res
+	editor.physics = phys
 	editor.scene = scene
 
 	editor.cam.transform.world_transform = linalg.MATRIX4F32_IDENTITY
-	editor.cam.transform.pos = {0.0, 0.0, -10.0}
-	editor.cam.transform.rot = {0.0, 0.0, 0.0}
+	editor.cam.transform.pos = {0.0, 15.0, -10.0}
+	editor.cam.transform.rot = linalg.QUATERNIONF32_IDENTITY
 	editor.cam.transform.scale = {1.0, 1.0, 1.0}
 	cam := &editor.cam.camera
 	cam.aspect = 800.0 / 600.0

@@ -55,7 +55,7 @@ VSOutput vertMain(VSInput input, uniform push_const pc)
 	VSOutput output;
 	// output.Pos = mul(pfu.proj, mul(pfu.view, mul(ebuf.model, float4(input.Pos.xyz, 1.0))));
 	output.Pos = mul(pfu.proj, mul(pfu.view, mul(ebuf.model, float4(input.Pos.xyz, 1.0))));
-	output.Norm = normalize(input.norm);
+	output.Norm = mul(float3x3(ebuf.normal_matrix), input.norm);
 	output.UV = input.UV;
 	output.light_dir = float3(0.2, -1.0, 0.0);
 	return output;

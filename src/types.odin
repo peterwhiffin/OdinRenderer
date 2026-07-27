@@ -2,6 +2,7 @@ package main
 
 import vma "../../odin-vma"
 import "core:math/linalg"
+import b3 "vendor:box3d"
 import vk "vendor:vulkan"
 
 ENABLE_VALIDATION :: #config(ENABLE_VALIDATION, ODIN_DEBUG)
@@ -10,12 +11,23 @@ SHADER_PATH :: "shaders/"
 
 SHADER_FULLSCREEN :: #load("../build/lin/fullscreen.spv")
 SHADER_DEFAULT :: #load("../build/lin/default.spv")
+PHYSICS_TIMESTEP :: f32(1.0) / f32(60.0)
+
+Rigidbody :: struct {
+	entity:   ^Entity,
+	body_id:  b3.BodyId,
+	shape_id: b3.ShapeId,
+}
 
 Transform :: struct {
-	pos:             [3]f32,
-	rot:             [3]f32,
-	scale:           [3]f32,
+	entity:          ^Entity,
 	world_transform: linalg.Matrix4x4f32,
+	parent:          ^Transform,
+	children:        [dynamic]^Transform,
+	pos:             [3]f32,
+	rot:             quaternion128,
+	euler_angles:    [3]f32,
+	scale:           [3]f32,
 	is_dirty:        bool,
 }
 
@@ -32,6 +44,9 @@ Entity_Flags :: bit_set[Entity_Flag]
 Entity_Flag :: enum {
 	MESH_RENDERER,
 	RIGIDBODY,
+	SPOT_LIGHT,
+	POINT_LIGHT,
+	DIRECTIONAL_LIGHT,
 	CAMERA,
 }
 
@@ -46,7 +61,13 @@ Entity :: struct {
 	flags:         Entity_Flags,
 	transform:     Transform,
 	mesh_renderer: Mesh_Renderer,
+	rigidbody:     Rigidbody,
 	camera:        Camera,
+}
+
+Physics :: struct {
+	world:      b3.WorldId,
+	time_accum: f32,
 }
 
 Array :: struct($T: typeid) {
@@ -149,4 +170,5 @@ Renderer :: struct {
 	image_index:          u32,
 	test_buff:            []Buffer,
 	entities:             Array(Entity),
+	update_swap:          bool,
 }
