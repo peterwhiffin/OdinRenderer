@@ -3,31 +3,75 @@ package main
 import "core:fmt"
 import "core:log"
 import la "core:math/linalg"
+import b3 "vendor:box3d"
 import vk "vendor:vulkan"
 
+
 scene_init :: proc(s: ^Scene, ren: ^Renderer, res: ^Resources, p: ^Physics) {
-	s.entities.data = make([]Entity, 1000)
+	s.entities.data = make([]Entity, 100000)
 	e := scene_get_new_entity(s)
 	set_scale(&e.transform, {100.0, 1.0, 100.0})
 	mr := entity_add_mesh(s, e, ren, res)
 	mr.mesh = &res.meshes.data[0]
 	mr.color = {0.3, 0.3, 0.3, 1.0}
-	entity_add_rigidbody(s, p, e)
+	entity_add_rigidbody(s, p, e, e.transform.pos)
 
 	e = scene_get_new_entity(s)
+	set_scale(&e.transform, {1.0, 100.0, 100.0})
+	set_position(&e.transform, {100.0, 100.0, 0.0})
+	mr = entity_add_mesh(s, e, ren, res)
+	mr.mesh = &res.meshes.data[0]
+	mr.color = {0.3, 0.3, 0.3, 1.0}
+	entity_add_rigidbody(s, p, e, e.transform.pos)
+
+	e = scene_get_new_entity(s)
+	set_scale(&e.transform, {1.0, 100.0, 100.0})
+	set_position(&e.transform, {-100.0, 100.0, 0.0})
+	mr = entity_add_mesh(s, e, ren, res)
+	mr.mesh = &res.meshes.data[0]
+	mr.color = {0.3, 0.3, 0.3, 1.0}
+	entity_add_rigidbody(s, p, e, e.transform.pos)
+
+	e = scene_get_new_entity(s)
+	set_scale(&e.transform, {100.0, 100.0, 1.0})
+	set_position(&e.transform, {0.0, 100.0, 100.0})
+	mr = entity_add_mesh(s, e, ren, res)
+	mr.mesh = &res.meshes.data[0]
+	mr.color = {0.3, 0.3, 0.3, 1.0}
+	entity_add_rigidbody(s, p, e, e.transform.pos)
+
+	e = scene_get_new_entity(s)
+	set_scale(&e.transform, {100.0, 100.0, 1.0})
+	set_position(&e.transform, {0.0, 100.0, -100.0})
+	mr = entity_add_mesh(s, e, ren, res)
+	mr.mesh = &res.meshes.data[0]
+	mr.color = {0.3, 0.3, 0.3, 1.0}
+	entity_add_rigidbody(s, p, e, e.transform.pos)
+
+	e = scene_get_new_entity(s)
+	e.name = "Red"
 	set_position(&e.transform, {0.0, 10.0, 0.0})
 	mr = entity_add_mesh(s, e, ren, res)
 	mr.mesh = &res.meshes.data[0]
 	mr.color = {1.0, 0.0, 0.0, 1.0}
-
-	entity_add_rigidbody(s, p, e)
+	entity_add_rigidbody(s, p, e, e.transform.pos)
 
 	e = scene_get_new_entity(s)
+	e.name = "Green"
 	set_position(&e.transform, {1.5, 20.0, 0.0})
 	mr = entity_add_mesh(s, e, ren, res)
 	mr.mesh = &res.meshes.data[0]
 	mr.color = {0.0, 1.0, 0.0, 1.0}
-	entity_add_rigidbody(s, p, e)
+	entity_add_rigidbody(s, p, e, e.transform.pos)
+
+	e = scene_get_new_entity(s)
+	e.name = "Sponza"
+	set_position(&e.transform, {1.5, 20.0, 0.0})
+	set_scale(&e.transform, {0.01, 0.01, 0.01})
+	mr = entity_add_mesh(s, e, ren, res)
+	mr.mesh = &res.meshes.data[1]
+	mr.color = {1.0, 1.0, 1.0, 1.0}
+	// entity_add_rigidbody(s, p, e, e.transform.pos)
 }
 
 scene_update_transforms :: proc(s: ^Scene) {
@@ -76,9 +120,15 @@ entity_add_mesh :: proc(s: ^Scene, e: ^Entity, ren: ^Renderer, res: ^Resources) 
 	return mr
 }
 
-entity_add_rigidbody :: proc(s: ^Scene, p: ^Physics, e: ^Entity) {
+entity_add_rigidbody :: proc(
+	s: ^Scene,
+	p: ^Physics,
+	e: ^Entity,
+	pos: [3]f32,
+	type: b3.BodyType = .staticBody,
+) {
 	e.flags += {.RIGIDBODY}
-	physics_create_rigidbody(p, e)
+	physics_create_rigidbody(p, e, pos, type)
 }
 
 main :: proc() {
@@ -89,7 +139,6 @@ main :: proc() {
 	res: Resources
 	editor: Editor
 	scene: Scene
-
 
 	context.logger = log.create_console_logger()
 	g_ctx = context

@@ -265,14 +265,9 @@ load_gltf :: proc(
 		{.HOST_ACCESS_SEQUENTIAL_WRITE, .HOST_ACCESS_ALLOW_TRANSFER_INSTEAD, .MAPPED},
 	)
 
-	//TODO: figure out if this is meant to be used like this
-	mapped: [^]u8 = ([^]u8)(new_mesh.buffer.alloc_info.pMappedData)
+	mapped: [^]byte = ([^]byte)(new_mesh.buffer.alloc_info.pMappedData)
 	mem.copy(mapped, raw_data(verts), vsize)
 	mem.copy(mapped[vsize:], raw_data(indices), isize)
-
-	// mdata := new_mesh.buffer.alloc_info.pMappedData
-	// mem.copy(mdata, raw_data(verts), vsize)
-	// mem.copy(rawptr(uintptr(mdata) + uintptr(vsize)), raw_data(indices), isize)
 
 	return true
 }

@@ -7,6 +7,9 @@ struct VSInput {
 struct per_frame_uniforms {
 	float4x4 proj;
 	float4x4 view;
+	float4 light_dir;
+	float4 light_color;
+	float ambient;
 };
 
 struct entity {
@@ -42,22 +45,21 @@ SamplerState sampler;
 
 [[vk::binding(0, 1)]]
 ConstantBuffer<entity> ebuf;
+
 // [[vk::binding(1, 0)]]
 // ConstantBuffer<material> materials[];
 
-// [[vk::binding(0, 1)]]
-// ConstantBuffer<entity> ebuf;
-
 [shader("vertex")]
-VSOutput vertMain(VSInput input, uniform push_const pc)
+VSOutput vertMain(VSInput input, uniform push_const pc, uint inst: SV_InstanceID)
 {
 	per_frame_uniforms *pfu = pc.pfu;
 	VSOutput output;
-	// output.Pos = mul(pfu.proj, mul(pfu.view, mul(ebuf.model, float4(input.Pos.xyz, 1.0))));
 	output.Pos = mul(pfu.proj, mul(pfu.view, mul(ebuf.model, float4(input.Pos.xyz, 1.0))));
 	output.Norm = mul(float3x3(ebuf.normal_matrix), input.norm);
 	output.UV = input.UV;
-	output.light_dir = float3(0.2, -1.0, 0.0);
+	output.light_dir = pfu.light_dir.xyz;
+	// output.frag_pos =
+	output.frag_pos = mul(ebuf.model, float4(input.Pos, 1.0)).xyz;
 	return output;
 }
 
@@ -69,15 +71,13 @@ float sd_circle(float2 v, float r)
 [shader("fragment")]
 float4 fragMain(VSOutput input, uniform push_const pc)
 {
-	// per_frame_uniforms *pfu = pc.pfu;
 	float4 diffuse_color = tex[pc.tex_index].Sample(sampler, input.UV);
-	// float4 diffuse_color = float4(1.0, 0.0, 1.0, 1.0);
 
 	if (diffuse_color.a < 0.3f)
 		discard;
 
 	diffuse_color *= ebuf.color;
-	float3 ambient = mul(diffuse_color.rgb, 0.02);
+	float3 ambient = diffuse_color.rgb * pc.pfu.ambient;
 	float3 final_color = float3(0.0);
 
 	float3 norm = normalize(input.Norm);
@@ -85,16 +85,7 @@ float4 fragMain(VSOutput input, uniform push_const pc)
 	float3 direction = normalize(-input.light_dir);
 	float diff = max(dot(norm, direction), 0.0);
 
-	final_color = albedo * diff + ambient;
-
-	// float3 N = normalize(input.Norm);
-	// float3 L = normalize(input.light_dir);
-	// float3 V = normalize(-input.frag_pos);
-	// float3 R = reflect(-L, N);
-	// float3 diffuse = max(dot(N, L), 0.0025);
-	// float3 specular = pow(max(dot(R, V), 0.0), 16.0) * 0.75;
-	//
-	// final_color = diffuse * diffuse_color.rgb + specular;
+	final_color = albedo * pc.pfu.light_color.rgb * pc.pfu.light_color.a * diff + ambient;
 
 	return float4(final_color.rgb, ebuf.color.a);
 }

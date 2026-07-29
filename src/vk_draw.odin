@@ -9,13 +9,296 @@ import "core:mem"
 
 import vk "vendor:vulkan"
 
+begin_cmd :: proc(cmd: vk.CommandBuffer) {
+	vk.ResetCommandBuffer(cmd, {})
 
-draw_frame :: proc(ren: ^Renderer, win: ^Window, cam: ^Camera, s: ^Scene) {
+	cbi: vk.CommandBufferBeginInfo = {
+		sType = .COMMAND_BUFFER_BEGIN_INFO,
+		flags = {.ONE_TIME_SUBMIT},
+	}
+
+	check(vk.BeginCommandBuffer(cmd, &cbi))
+}
+
+draw_forward :: proc(
+	cmd: vk.CommandBuffer,
+	ren: ^Renderer,
+	win: ^Window,
+	cam: ^Camera,
+	s: ^Scene,
+) {
 	frame := ren.frame_index
 
+	out_barrier: []vk.ImageMemoryBarrier2 = {
+		{
+			sType = .IMAGE_MEMORY_BARRIER_2,
+			srcStageMask = {.COLOR_ATTACHMENT_OUTPUT},
+			srcAccessMask = {},
+			dstStageMask = {.COLOR_ATTACHMENT_OUTPUT},
+			dstAccessMask = {.COLOR_ATTACHMENT_READ, .COLOR_ATTACHMENT_WRITE},
+			oldLayout = .UNDEFINED,
+			newLayout = .ATTACHMENT_OPTIMAL,
+			image = ren.forward_images[frame].image,
+			subresourceRange = {aspectMask = {.COLOR}, levelCount = 1, layerCount = 1},
+		},
+		{
+			sType = .IMAGE_MEMORY_BARRIER_2,
+			srcStageMask = {.LATE_FRAGMENT_TESTS},
+			srcAccessMask = {.DEPTH_STENCIL_ATTACHMENT_WRITE},
+			dstStageMask = {.EARLY_FRAGMENT_TESTS},
+			dstAccessMask = {.DEPTH_STENCIL_ATTACHMENT_WRITE},
+			oldLayout = .UNDEFINED,
+			newLayout = .ATTACHMENT_OPTIMAL,
+			image = ren.depth_image.image,
+			subresourceRange = {aspectMask = {.DEPTH, .STENCIL}, levelCount = 1, layerCount = 1},
+		},
+	}
+
+	out_di: vk.DependencyInfo = {
+		sType                   = .DEPENDENCY_INFO,
+		imageMemoryBarrierCount = 2,
+		pImageMemoryBarriers    = raw_data(out_barrier),
+	}
+
+	vk.CmdPipelineBarrier2(cmd, &out_di)
+
+	cai: vk.RenderingAttachmentInfo = {
+		sType = .RENDERING_ATTACHMENT_INFO,
+		imageView = ren.forward_images[frame].view,
+		imageLayout = .ATTACHMENT_OPTIMAL,
+		loadOp = .CLEAR,
+		storeOp = .STORE,
+		clearValue = {color = {float32 = {0.0, 0.0, 0.0, 1.0}}},
+	}
+
+	dai: vk.RenderingAttachmentInfo = {
+		sType = .RENDERING_ATTACHMENT_INFO,
+		imageView = ren.depth_image.view,
+		imageLayout = .ATTACHMENT_OPTIMAL,
+		loadOp = .CLEAR,
+		storeOp = .DONT_CARE,
+		clearValue = {depthStencil = {depth = 1.0, stencil = 0}},
+	}
+
+	ri: vk.RenderingInfo = {
+		sType = .RENDERING_INFO,
+		renderArea = {extent = {width = ren.post_size.x, height = ren.post_size.y}},
+		layerCount = 1,
+		colorAttachmentCount = 1,
+		pColorAttachments = &cai,
+		pDepthAttachment = &dai,
+	}
+
+	vk.CmdBeginRendering(cmd, &ri)
+
+	vp: vk.Viewport = {
+		width    = f32(ren.post_size.x),
+		height   = f32(ren.post_size.y),
+		minDepth = 0.0,
+		maxDepth = 1.0,
+	}
+
+	vk.CmdSetViewport(cmd, 0, 1, &vp)
+
+	sc: vk.Rect2D = {
+		extent = {width = ren.post_size.x, height = ren.post_size.y},
+	}
+
+	vk.CmdSetScissor(cmd, 0, 1, &sc)
+
+	vk.CmdBindPipeline(cmd, .GRAPHICS, ren.forward_pipeline)
+
+	ren.per_frame_uniform.proj = cam.proj
+	ren.per_frame_uniform.view = cam.view
+
+	mem.copy(
+		ren.test_buff[frame].alloc_info.pMappedData,
+		&ren.per_frame_uniform,
+		size_of(Frame_Uniforms),
+	)
+
+	offset: u32 = 0
+	vk.CmdBindDescriptorSets(
+		cmd,
+		.GRAPHICS,
+		ren.forward_pipeline_layout,
+		0,
+		1,
+		&ren.desc_set_tex,
+		0,
+		&offset,
+	)
+
+
+	pc: Push_Constants = {
+		addr      = ren.test_buff[frame].address,
+		tex_index = 0,
+	}
+
+	vk.CmdPushConstants(
+		cmd,
+		ren.forward_pipeline_layout,
+		{.FRAGMENT, .VERTEX},
+		0,
+		size_of(Push_Constants),
+		&pc,
+	)
+
+	voffset: vk.DeviceSize = 0
+
+
+	for i in 0 ..< s.entities.count {
+		e := &s.entities.data[i]
+		if .MESH_RENDERER not_in e.flags do continue
+
+		mr := &e.mesh_renderer
+		m := mr.mesh
+
+		voffset: vk.DeviceSize = 0
+		vk.CmdBindVertexBuffers(cmd, 0, 1, &m.buffer.buff, &voffset)
+		vk.CmdBindIndexBuffer(cmd, m.buffer.buff, vk.DeviceSize(m.index_offset), .UINT32)
+
+		muni: Mesh_Uniforms = {
+			model         = e.transform.world_transform,
+			normal_matrix = mr.normal_matrix,
+			color         = mr.color,
+		}
+
+		mem.copy(mr.uniform_buffers[frame].alloc_info.pMappedData, &muni, size_of(Mesh_Uniforms))
+
+		vk.CmdBindDescriptorSets(
+			cmd,
+			.GRAPHICS,
+			ren.forward_pipeline_layout,
+			1,
+			1,
+			&mr.desc_sets[frame],
+			0,
+			nil,
+		)
+
+		for &sm, i in mr.mesh.submeshes {
+			pc: Push_Constants = {
+				addr      = ren.test_buff[frame].address,
+				tex_index = sm.tex_index,
+			}
+
+			vk.CmdPushConstants(
+				cmd,
+				ren.forward_pipeline_layout,
+				{.FRAGMENT, .VERTEX},
+				0,
+				size_of(Push_Constants),
+				&pc,
+			)
+
+			vk.CmdDrawIndexed(cmd, u32(sm.index_count), 1, u32(sm.index_offset), 0, 0)
+		}
+	}
+
+	vk.CmdEndRendering(cmd)
+}
+
+
+draw_post :: proc(cmd: vk.CommandBuffer, ren: ^Renderer, win: ^Window) {
+	frame := ren.frame_index
+
+	out_barrier: []vk.ImageMemoryBarrier2 = {
+		{
+			sType = .IMAGE_MEMORY_BARRIER_2,
+			srcStageMask = {.COLOR_ATTACHMENT_OUTPUT},
+			srcAccessMask = {.COLOR_ATTACHMENT_WRITE},
+			dstStageMask = {.FRAGMENT_SHADER},
+			dstAccessMask = {.COLOR_ATTACHMENT_READ},
+			oldLayout = .ATTACHMENT_OPTIMAL,
+			newLayout = .READ_ONLY_OPTIMAL,
+			image = ren.forward_images[frame].image,
+			subresourceRange = {aspectMask = {.COLOR}, levelCount = 1, layerCount = 1},
+		},
+		{
+			sType = .IMAGE_MEMORY_BARRIER_2,
+			srcStageMask = {.COLOR_ATTACHMENT_OUTPUT},
+			srcAccessMask = {},
+			dstStageMask = {.COLOR_ATTACHMENT_OUTPUT},
+			dstAccessMask = {.COLOR_ATTACHMENT_READ, .COLOR_ATTACHMENT_WRITE},
+			oldLayout = .UNDEFINED,
+			newLayout = .ATTACHMENT_OPTIMAL,
+			image = ren.swap_images[ren.image_index].image,
+			subresourceRange = {aspectMask = {.COLOR}, levelCount = 1, layerCount = 1},
+		},
+	}
+
+	out_di: vk.DependencyInfo = {
+		sType                   = .DEPENDENCY_INFO,
+		imageMemoryBarrierCount = 2,
+		pImageMemoryBarriers    = raw_data(out_barrier),
+	}
+
+	vk.CmdPipelineBarrier2(cmd, &out_di)
+
+	cai: vk.RenderingAttachmentInfo = {
+		sType = .RENDERING_ATTACHMENT_INFO,
+		imageView = ren.swap_images[ren.image_index].view,
+		imageLayout = .ATTACHMENT_OPTIMAL,
+		loadOp = .CLEAR,
+		storeOp = .STORE,
+		clearValue = {color = {float32 = {0.0, 0.0, 0.0, 1.0}}},
+	}
+
+	ri: vk.RenderingInfo = {
+		sType = .RENDERING_INFO,
+		renderArea = {extent = {width = win.w, height = win.h}},
+		layerCount = 1,
+		colorAttachmentCount = 1,
+		pColorAttachments = &cai,
+	}
+
+	vk.CmdBeginRendering(cmd, &ri)
+
+	vp: vk.Viewport = {
+		width    = f32(win.w),
+		height   = f32(win.h),
+		minDepth = 0.0,
+		maxDepth = 1.0,
+	}
+
+	vk.CmdSetViewport(cmd, 0, 1, &vp)
+
+	sc: vk.Rect2D = {
+		extent = {width = win.w, height = win.h},
+	}
+
+	vk.CmdSetScissor(cmd, 0, 1, &sc)
+
+	vk.CmdBindPipeline(cmd, .GRAPHICS, ren.post_pipeline)
+
+	mem.copy(
+		ren.post_uniform_buffers[frame].alloc_info.pMappedData,
+		&ren.post_settings,
+		size_of(Post_Settings),
+	)
+
+	vk.CmdBindDescriptorSets(
+		cmd,
+		.GRAPHICS,
+		ren.post_pipeline_layout,
+		0,
+		1,
+		&ren.desc_set_post[frame],
+		0,
+		nil,
+	)
+
+	vk.CmdDraw(cmd, 3, 1, 0, 0)
+
+	imgui_impl_vulkan.RenderDrawData(imgui.GetDrawData(), cmd)
+	vk.CmdEndRendering(cmd)
+}
+
+begin_frame :: proc(ren: ^Renderer) -> vk.CommandBuffer {
+	frame := ren.frame_index
 	check(vk.WaitForFences(ren.device, 1, &ren.fences[frame], true, max(u64)))
 	check(vk.ResetFences(ren.device, 1, &ren.fences[frame]))
-
 
 	swapchain_check(
 		ren,
@@ -40,156 +323,12 @@ draw_frame :: proc(ren: ^Renderer, win: ^Window, cam: ^Camera, s: ^Scene) {
 
 	check(vk.BeginCommandBuffer(cmd, &cbi))
 
-	out_barrier: []vk.ImageMemoryBarrier2 = {
-		{
-			sType = .IMAGE_MEMORY_BARRIER_2,
-			srcStageMask = {.COLOR_ATTACHMENT_OUTPUT},
-			srcAccessMask = {},
-			dstStageMask = {.COLOR_ATTACHMENT_OUTPUT},
-			dstAccessMask = {.COLOR_ATTACHMENT_READ, .COLOR_ATTACHMENT_WRITE},
-			oldLayout = .UNDEFINED,
-			newLayout = .ATTACHMENT_OPTIMAL,
-			image = ren.swap_images[ren.image_index].image,
-			subresourceRange = {aspectMask = {.COLOR}, levelCount = 1, layerCount = 1},
-		},
-		{
-			sType = .IMAGE_MEMORY_BARRIER_2,
-			srcStageMask = {.LATE_FRAGMENT_TESTS},
-			srcAccessMask = {.DEPTH_STENCIL_ATTACHMENT_WRITE},
-			dstStageMask = {.EARLY_FRAGMENT_TESTS},
-			dstAccessMask = {.DEPTH_STENCIL_ATTACHMENT_WRITE},
-			oldLayout = .UNDEFINED,
-			newLayout = .ATTACHMENT_OPTIMAL,
-			image = ren.depth_image.image,
-			subresourceRange = {aspectMask = {.DEPTH, .STENCIL}, levelCount = 1, layerCount = 1},
-		},
-	}
+	return cmd
+}
 
-	out_di: vk.DependencyInfo = {
-		sType                   = .DEPENDENCY_INFO,
-		imageMemoryBarrierCount = 2,
-		pImageMemoryBarriers    = raw_data(out_barrier),
-	}
-
-	vk.CmdPipelineBarrier2(cmd, &out_di)
-
-
-	cai: vk.RenderingAttachmentInfo = {
-		sType = .RENDERING_ATTACHMENT_INFO,
-		imageView = ren.swap_images[ren.image_index].view,
-		imageLayout = .ATTACHMENT_OPTIMAL,
-		loadOp = .CLEAR,
-		storeOp = .STORE,
-		clearValue = {color = {float32 = {0.0, 0.0, 0.0, 1.0}}},
-	}
-
-	dai: vk.RenderingAttachmentInfo = {
-		sType = .RENDERING_ATTACHMENT_INFO,
-		imageView = ren.depth_image.view,
-		imageLayout = .ATTACHMENT_OPTIMAL,
-		loadOp = .CLEAR,
-		storeOp = .DONT_CARE,
-		clearValue = {depthStencil = {depth = 1.0, stencil = 0}},
-	}
-
-	ri: vk.RenderingInfo = {
-		sType = .RENDERING_INFO,
-		renderArea = {extent = {width = win.w, height = win.h}},
-		layerCount = 1,
-		colorAttachmentCount = 1,
-		pColorAttachments = &cai,
-		pDepthAttachment = &dai,
-	}
-
-	vk.CmdBeginRendering(cmd, &ri)
-
-	vp: vk.Viewport = {
-		width    = f32(win.w),
-		height   = f32(win.h),
-		minDepth = 0.0,
-		maxDepth = 1.0,
-	}
-
-	vk.CmdSetViewport(cmd, 0, 1, &vp)
-
-	sc: vk.Rect2D = {
-		extent = {width = win.w, height = win.h},
-	}
-
-	vk.CmdSetScissor(cmd, 0, 1, &sc)
-
-	vk.CmdBindPipeline(cmd, .GRAPHICS, ren.post_pipeline)
-
-	uni: Frame_Uniforms = {
-		proj = cam.proj,
-		view = cam.view,
-	}
-
-	mem.copy(ren.test_buff[frame].alloc_info.pMappedData, &uni, size_of(Frame_Uniforms))
-
-	offset: u32 = 0
-	vk.CmdBindDescriptorSets(
-		cmd,
-		.GRAPHICS,
-		ren.post_pipeline_layout,
-		0,
-		1,
-		&ren.desc_set_tex,
-		0,
-		&offset,
-	)
-
-	for i in 0 ..< s.entities.count {
-		e := &s.entities.data[i]
-		if .MESH_RENDERER not_in e.flags do continue
-
-		mr := &e.mesh_renderer
-		m := mr.mesh
-
-		voffset: vk.DeviceSize = 0
-		vk.CmdBindVertexBuffers(cmd, 0, 1, &m.buffer.buff, &voffset)
-		vk.CmdBindIndexBuffer(cmd, m.buffer.buff, vk.DeviceSize(m.index_offset), .UINT32)
-
-		muni: Mesh_Uniforms = {
-			model         = e.transform.world_transform,
-			normal_matrix = mr.normal_matrix,
-			color         = mr.color,
-		}
-
-		mem.copy(mr.uniform_buffers[frame].alloc_info.pMappedData, &muni, size_of(Mesh_Uniforms))
-
-		vk.CmdBindDescriptorSets(
-			cmd,
-			.GRAPHICS,
-			ren.post_pipeline_layout,
-			1,
-			1,
-			&mr.desc_sets[frame],
-			0,
-			nil,
-		)
-
-		for &sm, i in mr.mesh.submeshes {
-			pc: Push_Constants = {
-				addr      = ren.test_buff[frame].address,
-				tex_index = sm.tex_index,
-			}
-
-			vk.CmdPushConstants(
-				cmd,
-				ren.post_pipeline_layout,
-				{.FRAGMENT, .VERTEX},
-				0,
-				size_of(Push_Constants),
-				&pc,
-			)
-
-			vk.CmdDrawIndexed(cmd, u32(sm.index_count), 1, u32(sm.index_offset), 0, 0)
-		}
-	}
-
-	imgui_impl_vulkan.RenderDrawData(imgui.GetDrawData(), cmd)
-	vk.CmdEndRendering(cmd)
+end_frame :: proc(cmd: vk.CommandBuffer, ren: ^Renderer) {
+	cmd := cmd
+	frame := ren.frame_index
 
 	present_barrier: vk.ImageMemoryBarrier2 = {
 		sType = .IMAGE_MEMORY_BARRIER_2,
@@ -212,6 +351,7 @@ draw_frame :: proc(ren: ^Renderer, win: ^Window, cam: ^Camera, s: ^Scene) {
 	vk.CmdPipelineBarrier2(cmd, &pdi)
 	vk.EndCommandBuffer(cmd)
 
+
 	wait_stages: vk.PipelineStageFlags = {.COLOR_ATTACHMENT_OUTPUT}
 	si: vk.SubmitInfo = {
 		sType                = .SUBMIT_INFO,
@@ -224,8 +364,8 @@ draw_frame :: proc(ren: ^Renderer, win: ^Window, cam: ^Camera, s: ^Scene) {
 		pSignalSemaphores    = &ren.semaphore_render[ren.image_index],
 	}
 
-	check(vk.QueueSubmit(ren.gfx_q, 1, &si, ren.fences[frame]))
 
+	check(vk.QueueSubmit(ren.gfx_q, 1, &si, ren.fences[frame]))
 	ren.frame_index = (ren.frame_index + 1) % FIF
 
 
@@ -239,4 +379,11 @@ draw_frame :: proc(ren: ^Renderer, win: ^Window, cam: ^Camera, s: ^Scene) {
 	}
 
 	swapchain_check(ren, vk.QueuePresentKHR(ren.gfx_q, &pi))
+}
+
+draw_frame :: proc(ren: ^Renderer, win: ^Window, cam: ^Camera, s: ^Scene) {
+	cmd := begin_frame(ren)
+	draw_forward(cmd, ren, win, cam, s)
+	draw_post(cmd, ren, win)
+	end_frame(cmd, ren)
 }

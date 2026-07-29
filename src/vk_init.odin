@@ -1,7 +1,9 @@
 package main
 
+import "core:fmt"
 import "core:log"
 import "core:math"
+import "core:math/linalg"
 import "core:slice"
 
 import vma "../../odin-vma"
@@ -264,6 +266,33 @@ load_default_textures :: proc(ren: ^Renderer, res: ^Resources) {
 	load_image(ren, res, img, nil, &white_color[0], 1, 1, 4)
 }
 
+create_forward_images :: proc(ren: ^Renderer, win: ^Window) {
+	for i in 0 ..< FIF {
+		ren.forward_images[i].fmt = .R8G8B8A8_SRGB
+		ren.forward_images[i] = create_image(
+			ren,
+			{ren.post_size.x, ren.post_size.y, 1},
+			1,
+			{._1},
+			{.COLOR_ATTACHMENT, .SAMPLED},
+			ren.forward_images[i].fmt,
+			{.COLOR},
+		)
+	}
+}
+
+create_post_buffers :: proc(ren: ^Renderer) {
+	ren.post_uniform_buffers = make([]Buffer, FIF)
+	for &buf in ren.post_uniform_buffers {
+		buf = create_buffer(
+			ren,
+			size_of(Post_Settings),
+			{.UNIFORM_BUFFER},
+			{.HOST_ACCESS_SEQUENTIAL_WRITE, .HOST_ACCESS_ALLOW_TRANSFER_INSTEAD, .MAPPED},
+		)
+	}
+}
+
 renderer_init :: proc(ren: ^Renderer, win: ^Window, res: ^Resources) {
 	vk.load_proc_addresses_global(rawptr(sdl.Vulkan_GetVkGetInstanceProcAddr()))
 	assert(vk.CreateInstance != nil, "Vulkan Global Function Pointers Not Loaded")
@@ -282,22 +311,38 @@ renderer_init :: proc(ren: ^Renderer, win: ^Window, res: ^Resources) {
 	create_allocator(ren)
 	create_surface(ren, win)
 	swapchain_create(ren, win)
-	create_depth_image(ren, win.w, win.h)
 	create_sync_primitives(ren)
 	create_command_buffer(ren)
 	create_sampler(ren)
+	create_post_buffers(ren)
+
+	aspect: f32 = 1920.0 / 1080.0
+	h: f32 = 360.0
+	ren.post_size = {u32(h * aspect), u32(h)}
+	ren.forward_images = make([]Image, FIF)
+	create_forward_images(ren, win)
+	create_depth_image(ren, ren.post_size.x, ren.post_size.y)
+
+
 	load_default_textures(ren, res)
 	load_model(ren, res, 1.0, "assets/models/primitives/cube.gltf")
-	load_model(ren, res, 1.0, "assets/models/primitives/sphere.gltf")
-	load_model(ren, res, 1.0, "assets/models/primitives/capsule.gltf")
+	// load_model(ren, res, 1.0, "assets/models/primitives/sphere.gltf")
+	// load_model(ren, res, 1.0, "assets/models/primitives/capsule.gltf")
+	// load_model(ren, res, 1.0, "assets/models/trashcan.gltf")
+	//
 	load_model(ren, res, 0.01, "../glTF-Sample-Assets/Models/Sponza/glTF/Sponza.gltf")
-	load_model(ren, res, 1.0, "../glTF-Sample-Assets/Models/DamagedHelmet/glTF/DamagedHelmet.gltf")
+	// load_model(ren, res, 1.0, "../glTF-Sample-Assets/Models/DamagedHelmet/glTF/DamagedHelmet.gltf")
 	create_descriptor_pool(ren)
 	create_descriptor_layouts(ren, res)
 	descriptor_set_create_tex(ren, res)
+	descriptor_set_create_post(ren, res)
+
 	// ren.post_shader = create_shader_modules(ren, SHADER_FULLSCREEN)
 	ren.default_shader = create_shader_modules(ren, SHADER_DEFAULT)
-	ren.post_pipeline, ren.post_pipeline_layout = create_pipeline(ren)
+	ren.post_shader = create_shader_modules(ren, SHADER_FULLSCREEN)
+
+	ren.forward_pipeline, ren.forward_pipeline_layout = create_pipeline(ren)
+	ren.post_pipeline, ren.post_pipeline_layout = create_post_pipeline(ren)
 
 	ren.test_buff = make([]Buffer, FIF)
 
@@ -309,4 +354,11 @@ renderer_init :: proc(ren: ^Renderer, win: ^Window, res: ^Resources) {
 			{.HOST_ACCESS_SEQUENTIAL_WRITE, .HOST_ACCESS_ALLOW_TRANSFER_INSTEAD, .MAPPED},
 		)
 	}
+
+	ren.post_settings.pixel_size = {3.0, 3.0}
+	ren.post_settings.fade = {0.4, 0.3}
+	ren.post_settings.min_brightness = {0.0, 0.0, 0.0, 0.0}
+	ren.per_frame_uniform.light_dir = {0.2, -1.0, 0.0, 0.0}
+	ren.per_frame_uniform.light_color = {1.0, 1.0, 1.0, 1.0}
+	ren.per_frame_uniform.ambient = 0.0
 }

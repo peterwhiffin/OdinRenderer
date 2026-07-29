@@ -10,18 +10,25 @@ import b3 "vendor:box3d"
 import vk "vendor:vulkan"
 
 Editor :: struct {
-	ren:        ^Renderer,
-	win:        ^Window,
-	input:      ^Input,
-	res:        ^Resources,
-	scene:      ^Scene,
-	physics:    ^Physics,
-	cam:        Entity,
-	selected:   ^Entity,
-	cam_pitch:  f32,
-	cam_yaw:    f32,
-	move_speed: f32,
-	look_sens:  f32,
+	ren:         ^Renderer,
+	win:         ^Window,
+	input:       ^Input,
+	res:         ^Resources,
+	scene:       ^Scene,
+	physics:     ^Physics,
+	cam:         Entity,
+	selected:    ^Entity,
+	fps:         f32,
+	time_accum:  f32,
+	frame_time:  f32,
+	frame_count: u32,
+	cam_pitch:   f32,
+	cam_yaw:     f32,
+	move_speed:  f32,
+	look_sens:   f32,
+	y_offset:    u32,
+	x_offset:    u32,
+	z_offset:    u32,
 }
 
 update_camera :: proc(editor: ^Editor) {
@@ -79,6 +86,108 @@ editor_draw_settings :: proc(editor: ^Editor) {
 	defer imgui.End()
 
 	imgui.DragFloat3("cam pos", &editor.cam.transform.pos, 0.01, 0.0, 0.0, "%.2f", {.ColorMarkers})
+
+	if editor.time_accum >= 1.0 {
+		editor.fps = f32(editor.frame_count) / editor.time_accum
+		editor.frame_time = (editor.time_accum / f32(editor.frame_count)) * 1000.0
+		editor.time_accum = 0.0
+		editor.frame_count = 0
+	} else {
+		editor.time_accum += f32(editor.win.delta_time)
+		editor.frame_count += 1
+	}
+
+	imgui.Checkbox("Enable CRT", &editor.ren.post_settings.crt_enabled)
+
+	imgui.DragFloat2(
+		"Pixel Size",
+		&editor.ren.post_settings.pixel_size,
+		3.0,
+		3.0,
+		0.0,
+		"%.0f",
+		{.ColorMarkers},
+	)
+
+	imgui.DragFloat2(
+		"Pixel Fade",
+		&editor.ren.post_settings.fade,
+		0.001,
+		0.0,
+		1.0,
+		"%.3f",
+		{.ColorMarkers},
+	)
+
+	imgui.DragFloat3(
+		"Min Pixel Brightness",
+		(^[3]f32)(&editor.ren.post_settings.min_brightness),
+		0.0001,
+		0.0,
+		2.0,
+		"%.4f",
+		{.ColorMarkers},
+	)
+
+	imgui.DragFloat3(
+		"Light Direction",
+		(^[3]f32)(&editor.ren.per_frame_uniform.light_dir),
+		0.001,
+		-1.0,
+		1.0,
+		"%.3f",
+		{.ColorMarkers},
+	)
+
+	imgui.ColorEdit3("Color", (^[3]f32)(&editor.ren.per_frame_uniform.light_color), {})
+
+	imgui.DragFloat(
+		"Light Brightness",
+		&editor.ren.per_frame_uniform.light_color.a,
+		0.01,
+		0.0,
+		0.0,
+		"%.2f",
+		{.ColorMarkers},
+	)
+
+	imgui.DragFloat(
+		"Ambient Brightness",
+		&editor.ren.per_frame_uniform.ambient,
+		0.01,
+		0.0,
+		1.0,
+		"%.2f",
+		{.ColorMarkers},
+	)
+	imgui.Text("FPS: %.2f", editor.fps)
+	imgui.Text("Frame time: %.2f", editor.frame_time)
+	imgui.Text("Entity count: %u", editor.scene.entities.count)
+
+	if imgui.Button("Add Rigidbody") {
+
+		for x in 0 ..< 4 {
+			for y in 0 ..< 4 {
+				for z in 0 ..< 4 {
+					posx := u32(x) * 2
+					posy := u32(y) * 2
+					posz := u32(z) * 2
+					e := scene_get_new_entity(editor.scene)
+					set_position(&e.transform, {f32(posx), f32(posy + 30.0), f32(posz)})
+					mr := entity_add_mesh(editor.scene, e, editor.ren, editor.res)
+					mr.mesh = &editor.res.meshes.data[0]
+					mr.color = {0.0, 1.0, 0.0, 1.0}
+					entity_add_rigidbody(
+						editor.scene,
+						editor.physics,
+						e,
+						{f32(posx), f32(posy + 30), f32(posz)},
+						.dynamicBody,
+					)
+				}
+			}
+		}
+	}
 }
 
 editor_draw_inspector :: proc(editor: ^Editor) {
@@ -99,7 +208,7 @@ editor_draw_inspector :: proc(editor: ^Editor) {
 			}
 
 			if imgui.MenuItem("Add Rigidbody", nil, false, .RIGIDBODY not_in e.flags) {
-				entity_add_rigidbody(editor.scene, editor.physics, e)
+				entity_add_rigidbody(editor.scene, editor.physics, e, e.transform.pos, .staticBody)
 			}
 
 			imgui.EndPopup()

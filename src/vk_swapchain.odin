@@ -2,6 +2,7 @@ package main
 
 import vma "../../odin-vma"
 import "core:c"
+import "core:fmt"
 import "core:log"
 import sdl "vendor:sdl3"
 import vk "vendor:vulkan"
@@ -21,8 +22,8 @@ swapchain_check :: proc(ren: ^Renderer, result: vk.Result) {
 
 swapchain_update :: proc(ren: ^Renderer, win: ^Window) {
 	if !ren.update_swap do return
-
 	ren.update_swap = false
+
 	w, h: c.int
 	sdl.GetWindowSize(win.sdl_win, &w, &h)
 	win.w, win.h = u32(w), u32(h)
@@ -50,12 +51,32 @@ swapchain_update :: proc(ren: ^Renderer, win: ^Window) {
 		vk.DestroyImageView(ren.device, img.view, nil)
 	}
 
-	vma.DestroyImage(ren.allocator, ren.depth_image.image, ren.depth_image.allocation)
-	vk.DestroyImageView(ren.device, ren.depth_image.view, nil)
+	// for i in 0 ..< FIF {
+	// 	vma.DestroyImage(
+	// 		ren.allocator,
+	// 		ren.forward_images[i].image,
+	// 		ren.forward_images[i].allocation,
+	// 	)
+	// 	vk.DestroyImageView(ren.device, ren.forward_images[i].view, nil)
+	// }
 
-	create_depth_image(ren, win.w, win.h)
 
+	// vma.DestroyImage(ren.allocator, ren.depth_image.image, ren.depth_image.allocation)
+	// vk.DestroyImageView(ren.device, ren.depth_image.view, nil)
 
+	// create_depth_image(ren, win.w, win.h)
+	// create_forward_images(ren, win)
+	update_post_descriptors(ren)
+
+	// for img in ren.swap_images {
+	// 	fmt.printf("swap Image %#x\n", uintptr(img.image))
+	// }
+	//
+	// for img in ren.forward_images {
+	// 	fmt.printf("forward Image %#x\n", uintptr(img.image))
+	// }
+	//
+	// fmt.printf("depth Image %#x\n", uintptr(ren.depth_image.image))
 }
 
 swapchain_create :: proc(ren: ^Renderer, win: ^Window, old: vk.SwapchainKHR = 0) {
