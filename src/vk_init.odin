@@ -1,9 +1,6 @@
 package main
 
-import "core:fmt"
 import "core:log"
-import "core:math"
-import "core:math/linalg"
 import "core:slice"
 
 import vma "../../odin-vma"
@@ -50,9 +47,7 @@ end_one_time_cmd :: proc(ren: ^Renderer, cmd: vk.CommandBuffer) {
 create_intance :: proc(ren: ^Renderer) {
 	sdl_ext_count: u32
 	layer_count: u32 = 0
-	layers := make([dynamic]cstring)
-	defer delete(layers)
-	// layers: [d]cstring = {"VK_LAYER_KHRONOS_validation"}
+	layers := make([dynamic]cstring, context.temp_allocator)
 	extensions: [dynamic]cstring
 
 
@@ -119,7 +114,7 @@ create_device :: proc(ren: ^Renderer) {
 
 	for i in 0 ..< family_count {
 		if .GRAPHICS in families[i].queueFlags {
-			sdl_check(sdl.Vulkan_GetPresentationSupport(ren.instance, ren.physical, i))
+			check(sdl.Vulkan_GetPresentationSupport(ren.instance, ren.physical, i))
 			ren.gfx_q_family = i
 		}
 	}
@@ -132,7 +127,8 @@ create_device :: proc(ren: ^Renderer) {
 	}
 
 	f10: vk.PhysicalDeviceFeatures = {
-		samplerAnisotropy = true,
+		samplerAnisotropy        = true,
+		fragmentStoresAndAtomics = true,
 	}
 
 	f11: vk.PhysicalDeviceVulkan11Features = {
@@ -190,11 +186,11 @@ create_allocator :: proc(ren: ^Renderer) {
 create_surface :: proc(ren: ^Renderer, win: ^Window) {
 	w, h: i32
 
-	sdl_check(
+	check(
 		sdl.Vulkan_CreateSurface(win.sdl_win, ren.instance, nil, &ren.surface),
 		"Creating Vulkan Surface",
 	)
-	sdl_check(sdl.GetWindowSize(win.sdl_win, &w, &h))
+	check(sdl.GetWindowSize(win.sdl_win, &w, &h))
 	win.w, win.h = u32(w), u32(h)
 }
 
@@ -293,6 +289,19 @@ create_post_buffers :: proc(ren: ^Renderer) {
 	}
 }
 
+create_picking_buffers :: proc(ren: ^Renderer) {
+	ren.picking_buffers = make([]Buffer, FIF)
+	for &buf in ren.picking_buffers {
+		buf = create_buffer(
+			ren,
+			size_of(Picking_Data),
+			{.STORAGE_BUFFER},
+			{.HOST_ACCESS_RANDOM, .MAPPED},
+			.AUTO_PREFER_HOST,
+		)
+	}
+}
+
 renderer_init :: proc(ren: ^Renderer, win: ^Window, res: ^Resources) {
 	vk.load_proc_addresses_global(rawptr(sdl.Vulkan_GetVkGetInstanceProcAddr()))
 	assert(vk.CreateInstance != nil, "Vulkan Global Function Pointers Not Loaded")
@@ -315,6 +324,7 @@ renderer_init :: proc(ren: ^Renderer, win: ^Window, res: ^Resources) {
 	create_command_buffer(ren)
 	create_sampler(ren)
 	create_post_buffers(ren)
+	create_picking_buffers(ren)
 
 	aspect: f32 = 1920.0 / 1080.0
 	h: f32 = 360.0
@@ -336,6 +346,7 @@ renderer_init :: proc(ren: ^Renderer, win: ^Window, res: ^Resources) {
 	create_descriptor_layouts(ren, res)
 	descriptor_set_create_tex(ren, res)
 	descriptor_set_create_post(ren, res)
+	descriptor_set_create_pick(ren, res)
 
 	// ren.post_shader = create_shader_modules(ren, SHADER_FULLSCREEN)
 	ren.default_shader = create_shader_modules(ren, SHADER_DEFAULT)
@@ -360,5 +371,18 @@ renderer_init :: proc(ren: ^Renderer, win: ^Window, res: ^Resources) {
 	ren.post_settings.min_brightness = {0.0, 0.0, 0.0, 0.0}
 	ren.per_frame_uniform.light_dir = {0.2, -1.0, 0.0, 0.0}
 	ren.per_frame_uniform.light_color = {1.0, 1.0, 1.0, 1.0}
-	ren.per_frame_uniform.ambient = 0.0
+	ren.per_frame_uniform.ambient = 0.01
+	ren.post_settings.crt_enabled = true
+	ren.per_frame_uniform.light_color.a = 1.8
+
+	// pick := (^Picking_Data)(ren.picking_buffers[0].alloc_info.pMappedData)
+	// pick2 := (^Picking_Data)(ren.picking_buffers[1].alloc_info.pMappedData)
+	//
+	// pick^ = Picking_Data {
+	// 	entity_index = 33,
+	// }
+	//
+	// pick2^ = Picking_Data {
+	// 	entity_index = 33,
+	// }
 }

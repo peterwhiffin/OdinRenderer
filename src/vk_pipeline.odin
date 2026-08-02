@@ -11,7 +11,11 @@ create_pipeline :: proc(ren: ^Renderer) -> (vk.Pipeline, vk.PipelineLayout) {
 		size       = size_of(Push_Constants),
 	}
 
-	layouts: []vk.DescriptorSetLayout = {ren.desc_layout_tex, ren.desc_layout_entity}
+	layouts: []vk.DescriptorSetLayout = {
+		ren.desc_layout_tex,
+		ren.desc_layout_entity,
+		ren.desc_layout_pick,
+	}
 
 	lci: vk.PipelineLayoutCreateInfo = {
 		sType                  = .PIPELINE_LAYOUT_CREATE_INFO,
@@ -81,7 +85,7 @@ create_pipeline :: proc(ren: ^Renderer) -> (vk.Pipeline, vk.PipelineLayout) {
 		sType            = .PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
 		depthTestEnable  = true,
 		depthWriteEnable = true,
-		depthCompareOp   = .LESS_OR_EQUAL,
+		depthCompareOp   = .GREATER,
 	}
 
 	fmt: vk.Format = .R8G8B8A8_SRGB
@@ -214,6 +218,7 @@ create_post_pipeline :: proc(ren: ^Renderer) -> (vk.Pipeline, vk.PipelineLayout)
 	dci: vk.PipelineDepthStencilStateCreateInfo = {
 		sType           = .PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
 		depthTestEnable = false,
+		depthCompareOp  = .GREATER,
 	}
 
 	// fmt: vk.Format = .R8G8B8A8_SRGB

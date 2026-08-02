@@ -2,6 +2,7 @@ package main
 
 import vma "../../odin-vma"
 import "core:c"
+import "core:container/xar"
 import "core:fmt"
 import "core:log"
 import "core:math"
@@ -148,7 +149,8 @@ load_gltf :: proc(
 	vert_count: u64
 	ind_count: u64
 	prim_count: u64
-	tex_offset: u32 = res.images.count
+	// tex_offset: u32 = res.texture_map.count
+	tex_offset: u32 = u32(res.images.len)
 
 	if data, result = cgltf.parse_file(opt, path); result != .success {
 		log.errorf("Failed to Parse File: %s", path)
@@ -168,7 +170,7 @@ load_gltf :: proc(
 
 	odin_str := string(path)
 	dir, file := filepath.split(odin_str)
-	new_mesh.name = strings.clone_to_cstring(file)
+	new_mesh.name = file
 
 	image_indices := make(map[^cgltf.image]u32)
 	defer delete(image_indices)
@@ -178,16 +180,15 @@ load_gltf :: proc(
 	for &img, i in data.images {
 		image_indices[&img] = u32(i)
 		img_path, err := filepath.join({dir, string(img.uri)})
-		cpath := strings.clone_to_cstring(img_path)
+		cpath := strings.clone_to_cstring(img_path, context.temp_allocator)
 		new_img := get_new_image(res)
 		load_image(ren, res, new_img, cpath)
-		delete(cpath)
 	}
 
-	verts := make([dynamic]Vertex)
-	indices := make([dynamic]u32)
-	defer delete(verts)
-	defer delete(indices)
+	verts := make([dynamic]Vertex, context.temp_allocator)
+	indices := make([dynamic]u32, context.temp_allocator)
+	// defer delete(verts)
+	// defer delete(indices)
 
 	vert_offset, ind_offset: uint
 
@@ -269,25 +270,25 @@ load_gltf :: proc(
 	mem.copy(mapped, raw_data(verts), vsize)
 	mem.copy(mapped[vsize:], raw_data(indices), isize)
 
+	res.mesh_map[new_mesh.name] = new_mesh
+	free_all(context.temp_allocator)
 	return true
 }
 
 
 get_new_image :: proc(res: ^Resources) -> ^Image {
-	img := &res.images.data[res.images.count]
-	res.images.count += 1
+	img, err := xar.push_back_elem_and_get_ptr(&res.images, Image{})
 	return img
 }
 
 get_new_mesh :: proc(res: ^Resources) -> ^Mesh {
-	mesh := &res.meshes.data[res.meshes.count]
-	res.meshes.count += 1
+	mesh, err := xar.push_back_elem_and_get_ptr(&res.meshes, Mesh{})
 	return mesh
 }
 
 resources_init :: proc(res: ^Resources) {
-	res.meshes.data = make([]Mesh, 100)
-	res.images.data = make([]Image, 500)
+	res.image_map = make(map[string]^Image, 500)
+	res.mesh_map = make(map[string]^Mesh)
 }
 
 load_model :: proc(ren: ^Renderer, res: ^Resources, scale: f32, path: cstring) {

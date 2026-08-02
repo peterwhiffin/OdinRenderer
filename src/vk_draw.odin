@@ -1,11 +1,11 @@
 package main
 
 import imgui "../../odin-imgui"
-import "../../odin-imgui/imgui_impl_sdl3"
 import "../../odin-imgui/imgui_impl_vulkan"
-import "core:fmt"
+import hm "core:container/handle_map"
 import "core:math/linalg"
 import "core:mem"
+import "core:slice"
 
 import vk "vendor:vulkan"
 
@@ -27,6 +27,7 @@ draw_forward :: proc(
 	cam: ^Camera,
 	s: ^Scene,
 ) {
+	profile_scoped()
 	frame := ren.frame_index
 
 	out_barrier: []vk.ImageMemoryBarrier2 = {
@@ -77,7 +78,7 @@ draw_forward :: proc(
 		imageLayout = .ATTACHMENT_OPTIMAL,
 		loadOp = .CLEAR,
 		storeOp = .DONT_CARE,
-		clearValue = {depthStencil = {depth = 1.0, stencil = 0}},
+		clearValue = {depthStencil = {depth = 0.0, stencil = 0}},
 	}
 
 	ri: vk.RenderingInfo = {
@@ -94,8 +95,8 @@ draw_forward :: proc(
 	vp: vk.Viewport = {
 		width    = f32(ren.post_size.x),
 		height   = f32(ren.post_size.y),
-		minDepth = 0.0,
-		maxDepth = 1.0,
+		minDepth = 1.0,
+		maxDepth = 0.0,
 	}
 
 	vk.CmdSetViewport(cmd, 0, 1, &vp)
@@ -108,8 +109,16 @@ draw_forward :: proc(
 
 	vk.CmdBindPipeline(cmd, .GRAPHICS, ren.forward_pipeline)
 
+
+	mn := win.input.relative_mouse_pos / [2]f32{f32(win.w), f32(win.h)}
+
+	mx := f32(ren.post_size.x) * mn.x
+	my := f32(ren.post_size.y) * mn.y
+
+
 	ren.per_frame_uniform.proj = cam.proj
 	ren.per_frame_uniform.view = cam.view
+	ren.per_frame_uniform.mouse_pos = {u32(mx), u32(my)}
 
 	mem.copy(
 		ren.test_buff[frame].alloc_info.pMappedData,
@@ -146,23 +155,32 @@ draw_forward :: proc(
 
 	voffset: vk.DeviceSize = 0
 
+	it := hm.iterator_make(&s.entities)
 
-	for i in 0 ..< s.entities.count {
-		e := &s.entities.data[i]
+	for e, h in hm.iterate(&it) {
 		if .MESH_RENDERER not_in e.flags do continue
 
 		mr := &e.mesh_renderer
 		m := mr.mesh
 
+
 		voffset: vk.DeviceSize = 0
 		vk.CmdBindVertexBuffers(cmd, 0, 1, &m.buffer.buff, &voffset)
 		vk.CmdBindIndexBuffer(cmd, m.buffer.buff, vk.DeviceSize(m.index_offset), .UINT32)
 
+		color: [4]f32 = mr.color
+		if h == ren.selected_entity {
+			color = {1.0, 0.0, 1.0, 1.0}
+		}
+
+
 		muni: Mesh_Uniforms = {
 			model         = e.transform.world_transform,
 			normal_matrix = mr.normal_matrix,
-			color         = mr.color,
+			color         = color,
+			entity_handle = h,
 		}
+
 
 		mem.copy(mr.uniform_buffers[frame].alloc_info.pMappedData, &muni, size_of(Mesh_Uniforms))
 
@@ -173,6 +191,17 @@ draw_forward :: proc(
 			1,
 			1,
 			&mr.desc_sets[frame],
+			0,
+			nil,
+		)
+
+		vk.CmdBindDescriptorSets(
+			cmd,
+			.GRAPHICS,
+			ren.forward_pipeline_layout,
+			2,
+			1,
+			&ren.desc_set_pick[frame],
 			0,
 			nil,
 		)
@@ -201,6 +230,7 @@ draw_forward :: proc(
 
 
 draw_post :: proc(cmd: vk.CommandBuffer, ren: ^Renderer, win: ^Window) {
+	profile_scoped()
 	frame := ren.frame_index
 
 	out_barrier: []vk.ImageMemoryBarrier2 = {
@@ -258,8 +288,8 @@ draw_post :: proc(cmd: vk.CommandBuffer, ren: ^Renderer, win: ^Window) {
 	vp: vk.Viewport = {
 		width    = f32(win.w),
 		height   = f32(win.h),
-		minDepth = 0.0,
-		maxDepth = 1.0,
+		minDepth = 1.0,
+		maxDepth = 0.0,
 	}
 
 	vk.CmdSetViewport(cmd, 0, 1, &vp)
@@ -296,6 +326,7 @@ draw_post :: proc(cmd: vk.CommandBuffer, ren: ^Renderer, win: ^Window) {
 }
 
 begin_frame :: proc(ren: ^Renderer) -> vk.CommandBuffer {
+	profile_scoped()
 	frame := ren.frame_index
 	check(vk.WaitForFences(ren.device, 1, &ren.fences[frame], true, max(u64)))
 	check(vk.ResetFences(ren.device, 1, &ren.fences[frame]))
@@ -327,6 +358,7 @@ begin_frame :: proc(ren: ^Renderer) -> vk.CommandBuffer {
 }
 
 end_frame :: proc(cmd: vk.CommandBuffer, ren: ^Renderer) {
+	profile_scoped()
 	cmd := cmd
 	frame := ren.frame_index
 
@@ -349,6 +381,28 @@ end_frame :: proc(cmd: vk.CommandBuffer, ren: ^Renderer) {
 	}
 
 	vk.CmdPipelineBarrier2(cmd, &pdi)
+
+
+	readback_barrier := vk.BufferMemoryBarrier2 {
+		sType         = .BUFFER_MEMORY_BARRIER_2,
+		srcStageMask  = {.FRAGMENT_SHADER},
+		srcAccessMask = {.SHADER_STORAGE_WRITE},
+		dstStageMask  = {.HOST},
+		dstAccessMask = {.HOST_READ},
+		buffer        = ren.picking_buffers[frame].buff,
+		offset        = 0,
+		size          = size_of(Picking_Data),
+	}
+
+	read_dep := vk.DependencyInfo {
+		sType                    = .DEPENDENCY_INFO,
+		bufferMemoryBarrierCount = 1,
+		pBufferMemoryBarriers    = &readback_barrier,
+	}
+
+	vk.CmdPipelineBarrier2(cmd, &read_dep)
+
+
 	vk.EndCommandBuffer(cmd)
 
 
@@ -366,6 +420,8 @@ end_frame :: proc(cmd: vk.CommandBuffer, ren: ^Renderer) {
 
 
 	check(vk.QueueSubmit(ren.gfx_q, 1, &si, ren.fences[frame]))
+
+	ren.prev_frame = ren.frame_index
 	ren.frame_index = (ren.frame_index + 1) % FIF
 
 
@@ -381,9 +437,32 @@ end_frame :: proc(cmd: vk.CommandBuffer, ren: ^Renderer) {
 	swapchain_check(ren, vk.QueuePresentKHR(ren.gfx_q, &pi))
 }
 
+sort_hit :: proc(i, j: Picking_Hit) -> bool {
+	return i.depth > j.depth
+}
+
+sort_picking_hits :: proc(ren: ^Renderer) {
+	profile_scoped()
+	selected := cast(^Picking_Data)ren.picking_buffers[ren.frame_index].alloc_info.pMappedData
+
+	mem.copy(
+		&ren.picking_hits.hits,
+		&selected.hits,
+		int(size_of(Picking_Hit) * selected.hit_count),
+	)
+
+	ren.picking_hits.hit_count = selected.hit_count
+
+	slice.sort_by(ren.picking_hits.hits[:selected.hit_count], sort_hit)
+	selected.hit_count = 0
+}
+
 draw_frame :: proc(ren: ^Renderer, win: ^Window, cam: ^Camera, s: ^Scene) {
+	profile_scoped()
+	ren.picking_hits.hit_count = 0
 	cmd := begin_frame(ren)
 	draw_forward(cmd, ren, win, cam, s)
 	draw_post(cmd, ren, win)
 	end_frame(cmd, ren)
+	sort_picking_hits(ren)
 }

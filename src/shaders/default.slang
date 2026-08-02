@@ -4,11 +4,27 @@ struct VSInput {
 	float2 UV;
 };
 
+struct Handle64 {
+	uint32_t idx;
+	uint32_t gen;
+};
+
+struct Picking_Hit {
+	float depth;
+	Handle64 handle;
+};
+
+struct Picking_Data {
+	Picking_Hit hits[4096];
+	uint32_t hit_count;
+};
+
 struct per_frame_uniforms {
 	float4x4 proj;
 	float4x4 view;
 	float4 light_dir;
 	float4 light_color;
+	uint32_t2 mouse_pos;
 	float ambient;
 };
 
@@ -16,6 +32,7 @@ struct entity {
 	float4x4 model;
 	float4x4 normal_matrix;
 	float4 color;
+	Handle64 handle;
 };
 
 struct VSOutput {
@@ -23,8 +40,11 @@ struct VSOutput {
 	float3 Norm;
 	float2 UV;
 	float3 frag_pos;
+	float3 viewfrag_pos;
 	nointerpolation float3 cam_pos;
 	nointerpolation float3 light_dir;
+	nointerpolation Handle64 entity_handle;
+	nointerpolation uint32_t2 mouse_pos;
 };
 
 struct push_const {
@@ -46,6 +66,8 @@ SamplerState sampler;
 [[vk::binding(0, 1)]]
 ConstantBuffer<entity> ebuf;
 
+[[vk::binding(0, 2)]]
+RWStructuredBuffer<Picking_Data> hit_buffer;
 // [[vk::binding(1, 0)]]
 // ConstantBuffer<material> materials[];
 
@@ -60,6 +82,9 @@ VSOutput vertMain(VSInput input, uniform push_const pc, uint inst: SV_InstanceID
 	output.light_dir = pfu.light_dir.xyz;
 	// output.frag_pos =
 	output.frag_pos = mul(ebuf.model, float4(input.Pos, 1.0)).xyz;
+	output.viewfrag_pos = mul(pfu.view, float4(input.Pos, 1.0)).xyz;
+	output.entity_handle = ebuf.handle;
+	output.mouse_pos = pfu.mouse_pos;
 	return output;
 }
 
@@ -69,8 +94,21 @@ float sd_circle(float2 v, float r)
 }
 
 [shader("fragment")]
-float4 fragMain(VSOutput input, uniform push_const pc)
+float4 fragMain(VSOutput input, float4 frag_pos: SV_Position, uniform push_const pc)
 {
+	uint2 center_min = input.mouse_pos - uint2(1, 1);
+	uint2 center_max = input.mouse_pos + uint2(1, 1);
+
+	if (frag_pos.x > center_min.x && frag_pos.y > center_min.y && frag_pos.x < center_max.x &&
+	    frag_pos.y < center_max.y) {
+		uint32_t current_index;
+		InterlockedAdd(hit_buffer[0].hit_count, 1, current_index);
+
+		if (current_index < 4096) {
+			hit_buffer[0].hits[current_index] = Picking_Hit(frag_pos.z, input.entity_handle);
+		}
+	}
+
 	float4 diffuse_color = tex[pc.tex_index].Sample(sampler, input.UV);
 
 	if (diffuse_color.a < 0.3f)
@@ -89,3 +127,29 @@ float4 fragMain(VSOutput input, uniform push_const pc)
 
 	return float4(final_color.rgb, ebuf.color.a);
 }
+
+// struct Hit {
+//     uint id;
+//     float depth;
+// };
+//
+// layout(binding = 0, std430) buffer HitBuffer {
+//     uint hitCount;
+//     Hit hits[];
+// }
+//
+// uniform ivec2 u_selectedRegionMin;
+// uniform ivec2 u_selectedRegionMax;
+// uniform uint u_objectId;
+//
+// void main() {
+//     const ivec2 fragCoord = ivec2(gl_FragCoord.xy);
+//     if (all(greaterThanEqual(fragCoord, u_selectedRegionMin)) && all(lessThanEqual(fragCoord, u_selectedRegionMax))) {
+//         const uint myIndex = atomicAdd(hitCount, 1);
+//         if (myIndex < hits.length()) {
+//             hits[myIndex] = Hit(u_objectId, gl_FragCoord.z);
+//         } else {
+//             atomicAdd(hitCount, -1);
+//         }
+//     }
+// }

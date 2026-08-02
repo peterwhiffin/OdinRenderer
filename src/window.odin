@@ -1,18 +1,13 @@
 package main
 
-import imgui "../../odin-imgui"
 import "../../odin-imgui/imgui_impl_sdl3"
-import "../../odin-imgui/imgui_impl_vulkan"
 import "core:c"
-import "core:fmt"
-import "core:log"
 
 import sdl "vendor:sdl3"
 
 Window :: struct {
+	input:          ^Input,
 	sdl_win:        ^sdl.Window,
-	w:              u32,
-	h:              u32,
 	frame_start:    u64,
 	last_time:      u64,
 	target_time:    u64,
@@ -20,67 +15,170 @@ Window :: struct {
 	spin_threshold: u64,
 	delta_time:     f64,
 	target_fps:     u32,
+	w:              u32,
+	h:              u32,
 	should_close:   bool,
 }
 
 Input :: struct {
-	sdl_keys:           [^]bool,
 	lock_mouse:         proc "c" (window: ^sdl.Window, enabled: bool) -> bool,
-	relative_mouse_pos: [2]f32,
+	sdl_keys:           [^]bool,
 	mouse_delta:        [2]f32,
-	wasd:               [2]f32,
+	relative_mouse_pos: [2]f32,
 	m0:                 bool,
 	m1:                 bool,
 }
 
-sdl_check :: proc(result: bool, msg: cstring = nil) {
-	if !result {
-		log.error("SDL Call Failed!")
-		log.errorf("%s%s", "SDL::", msg)
-	} else if msg != nil {
-		log.infof("%s%s", "SDL::", msg)
-	}
+Control_Bool :: ^bool
+
+Control_Axis :: struct {
+	positive: ^bool,
+	negative: ^bool,
 }
 
+Control_Axis2 :: struct {
+	x: Control_Axis,
+	y: Control_Axis,
+}
+
+Control_Pointer :: struct {
+	x: ^f32,
+	y: ^f32,
+}
+
+Control :: union {
+	Control_Bool,
+	Control_Axis,
+	Control_Axis2,
+	Control_Pointer,
+}
+
+Action_State :: enum {
+	STARTED,
+	PERFORMING,
+	ENDED,
+	SLEEPING,
+}
+
+Input_Action :: struct {
+	control:  Control,
+	value:    [2]f32,
+	state:    Action_State,
+	callback: proc(action: Input_Action),
+}
+
+
+read_value_button :: proc(b: Control_Bool) -> (value: f32, active: bool) {
+	if value := b^ ? 1.0 : 0.0; value != 0 {
+		active = true
+	}
+
+	return value, active
+}
+
+read_value_axis :: proc(b: Control_Axis) -> (value: f32, active: bool) {
+	ap: f32 = b.positive^ ? 1.0 : 0.0
+	an: f32 = b.negative^ ? 1.0 : 0.0
+
+	value = ap + an
+
+	active = ap != 0.0 || an != 0.0
+
+	return value, active
+}
+
+read_value_axis2 :: proc(b: Control_Axis2) -> (value: [2]f32, active: bool) {
+	xp: f32 = b.x.positive^ ? 1.0 : 0.0
+	xn: f32 = b.x.negative^ ? 1.0 : 0.0
+	yp: f32 = b.y.positive^ ? 1.0 : 0.0
+	yn: f32 = b.y.negative^ ? 1.0 : 0.0
+
+	value.x = xp - xn
+	value.y = yp - yn
+
+	active = xp != 0.0 || xn != 0.0 || yp != 0.0 || yn != 0.0
+
+	return value, active
+}
+
+read_value_pointer :: proc(b: Control_Pointer) -> (value: [2]f32, active: bool) {
+	x: f32 = b.x^
+	y: f32 = b.y^
+
+
+	active = x != 0.0 || y != 0.0
+	value = {x, y}
+
+	return value, active
+}
+
+
 window_init :: proc(win: ^Window, input: ^Input) {
-	sdl_check(sdl.Init(sdl.INIT_VIDEO), "Initializing")
+	check(sdl.Init(sdl.INIT_VIDEO), "Initializing")
 	input.sdl_keys = sdl.GetKeyboardState(nil)
 	input.lock_mouse = sdl.SetWindowRelativeMouseMode
-	sdl_check(sdl.Vulkan_LoadLibrary(nil), "Loading Vulkan Library")
+	check(sdl.Vulkan_LoadLibrary(nil), "Loading Vulkan Library")
 	win.w = 800
 	win.h = 600
 
 	flags: sdl.WindowFlags = {.VULKAN, .RESIZABLE}
-	// flags: sdl.WindowFlags = {.VULKAN}
 	win.sdl_win = sdl.CreateWindow("Odin Engine", i32(win.w), i32(win.h), flags)
 
-	sdl_check(win.sdl_win != nil, "Creating Window")
+	check(win.sdl_win != nil, "Creating Window")
 
 	win.target_fps = 144
 	win.target_time = 1_000_000_000 / u64(win.target_fps)
 	win.spin_threshold = 1_000_000
 }
 
-input_update :: proc(input: ^Input) {
-	buttons := sdl.GetMouseState(&input.relative_mouse_pos.x, &input.relative_mouse_pos.y)
+update_controls :: proc(ctl: []Input_Action) {
+	profile_scoped()
+	for &action in ctl {
+		ov := action.value
+		os := action.state
 
-	input.m1 = sdl.MouseButtonFlag.RIGHT in buttons
-	input.m0 = sdl.MouseButtonFlag.LEFT in buttons
+		active: bool
+		helper: typeid
 
-	W: f32 = input.sdl_keys[sdl.Scancode.W] ? 1.0 : 0.0
-	A: f32 = input.sdl_keys[sdl.Scancode.A] ? 1.0 : 0.0
-	S: f32 = input.sdl_keys[sdl.Scancode.S] ? 1.0 : 0.0
-	D: f32 = input.sdl_keys[sdl.Scancode.D] ? 1.0 : 0.0
+		switch v in action.control {
+		case Control_Bool:
+			action.value, active = read_value_button(action.control.(Control_Bool))
+		case Control_Axis:
+			action.value, active = read_value_axis(action.control.(Control_Axis))
+		case Control_Axis2:
+			action.value, active = read_value_axis2(action.control.(Control_Axis2))
+		case Control_Pointer:
+			action.value, active = read_value_pointer(action.control.(Control_Pointer))
+		}
 
-	input.wasd = {D - A, W - S}
+		switch action.state {
+		case .STARTED:
+			if active do action.state = .PERFORMING
+			else do action.state = .ENDED
+		case .PERFORMING:
+			if !active do action.state = .ENDED
+		case .ENDED:
+			if active do action.state = .STARTED
+			else do action.state = .SLEEPING
+		case .SLEEPING:
+			if active do action.state = .STARTED
+		}
+
+		if (os != action.state || ov != action.value) && action.callback != nil {
+			action.callback(action)
+		}
+
+	}
 }
 
 poll_events :: proc(ren: ^Renderer, win: ^Window, input: ^Input, cam: ^Camera) {
+	profile_scoped()
+	buttons := sdl.GetMouseState(&input.relative_mouse_pos.x, &input.relative_mouse_pos.y)
+	input.m0 = sdl.MouseButtonFlag.LEFT in buttons
+	input.m1 = sdl.MouseButtonFlag.RIGHT in buttons
+	input.mouse_delta = {0.0, 0.0}
+
 	event: sdl.Event
-
-	input.mouse_delta.x = 0
-	input.mouse_delta.y = 0
-
 	for sdl.PollEvent(&event) {
 		imgui_impl_sdl3.ProcessEvent(&event)
 		#partial switch (event.type) {
@@ -94,14 +192,15 @@ poll_events :: proc(ren: ^Renderer, win: ^Window, input: ^Input, cam: ^Camera) {
 		case .WINDOW_RESIZED:
 			w, h: c.int
 			sdl.GetWindowSize(win.sdl_win, &w, &h)
-			// win.w, win.h = u32(w), u32(h)
 			cam.aspect = f32(w) / f32(h)
 			ren.update_swap = true
 		}
 	}
+
 }
 
 sleep_spin :: proc(win: ^Window) {
+	profile_scoped()
 	win.elapsed_time = sdl.GetTicksNS() - win.frame_start
 
 	if win.elapsed_time < win.target_time {
@@ -117,7 +216,8 @@ sleep_spin :: proc(win: ^Window) {
 }
 
 time_update :: proc(win: ^Window) {
+	profile_scoped()
 	win.frame_start = sdl.GetTicksNS()
-	win.delta_time = f64(win.frame_start - win.last_time) / 1_000_000_000.0
+	win.delta_time = f64(win.frame_start - win.last_time) / 1_000_000_000
 	win.last_time = win.frame_start
 }

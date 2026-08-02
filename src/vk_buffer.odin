@@ -9,6 +9,7 @@ create_buffer :: proc(
 	size: vk.DeviceSize,
 	usage: vk.BufferUsageFlags,
 	allocation_flags: vma.AllocationCreateFlags,
+	allocation_usage: vma.MemoryUsage = .AUTO,
 ) -> Buffer {
 	buff: Buffer
 
@@ -21,7 +22,7 @@ create_buffer :: proc(
 
 	aci: vma.AllocationCreateInfo = {
 		flags = allocation_flags,
-		usage = .AUTO,
+		usage = allocation_usage,
 	}
 
 	check(

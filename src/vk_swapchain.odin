@@ -1,8 +1,6 @@
 package main
 
-import vma "../../odin-vma"
 import "core:c"
-import "core:fmt"
 import "core:log"
 import sdl "vendor:sdl3"
 import vk "vendor:vulkan"
@@ -22,6 +20,7 @@ swapchain_check :: proc(ren: ^Renderer, result: vk.Result) {
 
 swapchain_update :: proc(ren: ^Renderer, win: ^Window) {
 	if !ren.update_swap do return
+	profile_scoped()
 	ren.update_swap = false
 
 	w, h: c.int

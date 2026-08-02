@@ -1,6 +1,6 @@
 package main
 
-import "core:fmt"
+import hm "core:container/handle_map"
 import "core:math/linalg"
 import b3 "vendor:box3d"
 
@@ -10,32 +10,45 @@ physics_init :: proc(p: ^Physics) {
 	p.world = b3.CreateWorld(world_def)
 }
 
-physics_create_rigidbody :: proc(
+physics_create_rigidbody_box :: proc(
 	p: ^Physics,
 	e: ^Entity,
-	pos: [3]f32,
+	hull: ^b3.BoxHull,
 	type: b3.BodyType = .staticBody,
 ) {
 	bd := b3.DefaultBodyDef()
-	sd := b3.DefaultShapeDef()
-
-	bd.position = pos
+	bd.position = e.transform.pos
+	bd.rotation = e.transform.rot
 	bd.type = type
 	bd.enableSleep = true
+	e.rigidbody.body_id = b3.CreateBody(p.world, bd)
+	sd := b3.DefaultShapeDef()
+	e.rigidbody.shape_id = b3.CreateHullShape(e.rigidbody.body_id, sd, &hull.base)
+}
 
+physics_create_rigidbody_default :: proc(
+	p: ^Physics,
+	e: ^Entity,
+	type: b3.BodyType = .staticBody,
+) {
+	sd := b3.DefaultShapeDef()
 	box_hull := b3.MakeBoxHull(
 		1.0 * e.transform.scale.x,
 		1.0 * e.transform.scale.y,
 		1.0 * e.transform.scale.z,
 	)
+	physics_create_rigidbody_box(p, e, &box_hull, type)
+}
 
-	e.rigidbody.body_id = b3.CreateBody(p.world, bd)
-	e.rigidbody.shape_id = b3.CreateHullShape(e.rigidbody.body_id, sd, &box_hull.base)
+physics_create_rigidbody :: proc {
+	physics_create_rigidbody_default,
+	physics_create_rigidbody_box,
 }
 
 physics_update_positions :: proc(p: ^Physics, s: ^Scene, dt: f32) {
-	for i in 0 ..< s.entities.count {
-		e := &s.entities.data[i]
+	profile_scoped()
+	it := hm.iterator_make(&s.entities)
+	for e, h in hm.iterate(&it) {
 		if .RIGIDBODY in e.flags {
 			type := b3.Body_GetType(e.rigidbody.body_id)
 
@@ -59,10 +72,11 @@ physics_update_positions :: proc(p: ^Physics, s: ^Scene, dt: f32) {
 }
 
 physics_update :: proc(p: ^Physics, s: ^Scene, dt: f32) {
-
+	profile_scoped()
 	p.time_accum += dt
 
 	for p.time_accum >= PHYSICS_TIMESTEP {
+		profile_scoped("Physics Step")
 		p.time_accum -= PHYSICS_TIMESTEP
 		b3.World_Step(p.world, PHYSICS_TIMESTEP, 4)
 	}
