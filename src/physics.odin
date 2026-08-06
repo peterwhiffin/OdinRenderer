@@ -6,7 +6,7 @@ import b3 "vendor:box3d"
 
 physics_init :: proc(p: ^Physics) {
 	world_def := b3.DefaultWorldDef()
-	world_def.gravity = {0.0, -10.0, 0.0}
+	world_def.gravity = {0.0, -19.0, 0.0}
 	p.world = b3.CreateWorld(world_def)
 }
 
@@ -20,6 +20,7 @@ physics_create_rigidbody_box :: proc(
 	bd.position = e.transform.pos
 	bd.rotation = e.transform.rot
 	bd.type = type
+	bd.userData = e
 	bd.enableSleep = true
 	e.rigidbody.body_id = b3.CreateBody(p.world, bd)
 	sd := b3.DefaultShapeDef()
@@ -40,34 +41,47 @@ physics_create_rigidbody_default :: proc(
 	physics_create_rigidbody_box(p, e, &box_hull, type)
 }
 
+physics_create_rigidbody_capsule :: proc(
+	p: ^Physics,
+	e: ^Entity,
+	capsule: ^b3.Capsule,
+	type: b3.BodyType = .staticBody,
+) {
+	sd := b3.DefaultShapeDef()
+	bd := b3.DefaultBodyDef()
+	bd.motionLocks = {
+		angularX = true,
+		angularZ = true,
+	}
+
+	bd.position = e.transform.pos
+	bd.rotation = e.transform.rot
+	bd.type = type
+	bd.enableSleep = true
+	bd.userData = e
+	e.rigidbody.body_id = b3.CreateBody(p.world, bd)
+	e.rigidbody.shape_id = b3.CreateCapsuleShape(e.rigidbody.body_id, sd, capsule)
+}
+
 physics_create_rigidbody :: proc {
 	physics_create_rigidbody_default,
 	physics_create_rigidbody_box,
+	physics_create_rigidbody_capsule,
 }
 
 physics_update_positions :: proc(p: ^Physics, s: ^Scene, dt: f32) {
 	profile_scoped()
-	it := hm.iterator_make(&s.entities)
-	for e, h in hm.iterate(&it) {
-		if .RIGIDBODY in e.flags {
-			type := b3.Body_GetType(e.rigidbody.body_id)
 
-			if type == .staticBody {
-				r := linalg.quaternion_from_euler_angles(
-					e.transform.rot.y,
-					e.transform.rot.x,
-					e.transform.rot.z,
-					.YXZ,
-				)
+	events: b3.BodyEvents = b3.World_GetBodyEvents(p.world)
 
-				b3.Body_SetTransform(e.rigidbody.body_id, e.transform.pos, r)
-			} else {
-				new_pos: f32
-				set_position(&e.transform, b3.Body_GetPosition(e.rigidbody.body_id))
-				q := b3.Body_GetRotation(e.rigidbody.body_id)
-				set_rotation(&e.transform, q)
-			}
-		}
+	for i in 0 ..< events.moveCount {
+		event := &events.moveEvents[i]
+		e := (^Entity)(event.userData)
+		type := b3.Body_GetType(e.rigidbody.body_id)
+		new_pos: f32
+		set_position(&e.transform, b3.Body_GetPosition(e.rigidbody.body_id), s)
+		q := b3.Body_GetRotation(e.rigidbody.body_id)
+		set_rotation(&e.transform, q, s)
 	}
 }
 

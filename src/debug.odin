@@ -29,7 +29,7 @@ check_json_marshal :: proc(result: json.Marshal_Error, msg: cstring = nil) {
 check_os :: proc(result: os.Error, msg: cstring = nil) {
 	if result != nil {
 		log.error("OS Error")
-		log.errorf("%s%s", "OS::", msg)
+		log.panicf("%s%s", "OS::", msg)
 	} else if msg != nil {
 		log.infof("%s%s", "OS::", msg)
 	}

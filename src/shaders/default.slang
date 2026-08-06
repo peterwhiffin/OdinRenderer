@@ -106,6 +106,8 @@ float4 fragMain(VSOutput input, float4 frag_pos: SV_Position, uniform push_const
 
 		if (current_index < 4096) {
 			hit_buffer[0].hits[current_index] = Picking_Hit(frag_pos.z, input.entity_handle);
+		} else {
+			InterlockedAdd(hit_buffer[0].hit_count, -1, current_index);
 		}
 	}
 

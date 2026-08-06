@@ -49,6 +49,7 @@ create_intance :: proc(ren: ^Renderer) {
 	layer_count: u32 = 0
 	layers := make([dynamic]cstring, context.temp_allocator)
 	extensions: [dynamic]cstring
+	defer delete(extensions)
 
 
 	sdl_ext := sdl.Vulkan_GetInstanceExtensions(&sdl_ext_count)
@@ -351,6 +352,7 @@ renderer_init :: proc(ren: ^Renderer, win: ^Window, res: ^Resources) {
 	// ren.post_shader = create_shader_modules(ren, SHADER_FULLSCREEN)
 	ren.default_shader = create_shader_modules(ren, SHADER_DEFAULT)
 	ren.post_shader = create_shader_modules(ren, SHADER_FULLSCREEN)
+	ren.imgui_shader = create_shader_modules(ren, SHADER_FULLSCREEN)
 
 	ren.forward_pipeline, ren.forward_pipeline_layout = create_pipeline(ren)
 	ren.post_pipeline, ren.post_pipeline_layout = create_post_pipeline(ren)
@@ -374,15 +376,4 @@ renderer_init :: proc(ren: ^Renderer, win: ^Window, res: ^Resources) {
 	ren.per_frame_uniform.ambient = 0.01
 	ren.post_settings.crt_enabled = true
 	ren.per_frame_uniform.light_color.a = 1.8
-
-	// pick := (^Picking_Data)(ren.picking_buffers[0].alloc_info.pMappedData)
-	// pick2 := (^Picking_Data)(ren.picking_buffers[1].alloc_info.pMappedData)
-	//
-	// pick^ = Picking_Data {
-	// 	entity_index = 33,
-	// }
-	//
-	// pick2^ = Picking_Data {
-	// 	entity_index = 33,
-	// }
 }

@@ -2,6 +2,8 @@ package main
 
 import hm "core:container/handle_map"
 import "core:encoding/json"
+import "core:fmt"
+import "core:log"
 import "core:os"
 import "core:strings"
 import b3 "vendor:box3d"
@@ -126,7 +128,7 @@ get_s_camera :: proc(entity: ^Entity) -> S_Camera {
 get_s_entity :: proc(entity: ^Entity, scene: ^Scene) -> S_Entity {
 	se: S_Entity
 	se.children = make([dynamic]S_Entity, context.temp_allocator)
-	se.name = string(entity.name)
+	se.name = entity.name
 
 	se.flags = entity.flags
 
@@ -135,19 +137,19 @@ get_s_entity :: proc(entity: ^Entity, scene: ^Scene) -> S_Entity {
 		append(&se.children, get_s_entity(e, scene))
 	}
 
-	if .TRANSFORM in entity.flags {
+	if .Transform in entity.flags {
 		se.transform = get_s_transform(entity)
 	}
 
-	if .MESH_RENDERER in entity.flags {
+	if .Mesh_Renderer in entity.flags {
 		se.mesh_renderer = get_s_mesh_renderer(entity)
 	}
 
-	if .RIGIDBODY in entity.flags {
+	if .Rigidbody in entity.flags {
 		se.rigidbody = get_s_rigidbody(entity)
 	}
 
-	if .CAMERA in entity.flags {
+	if .Camera in entity.flags {
 		se.camera = get_s_camera(entity)
 	}
 
@@ -189,7 +191,24 @@ write_scene :: proc(scene: ^Scene) {
 	defer delete(data)
 	check(merr)
 
+	fp, err := strings.concatenate({sw.name, ".scene"}, context.temp_allocator)
+
+	if err != .None {
+		log.errorf("Failed to concatenate strings: ", sw.name, " and ", ".scene")
+		return
+	}
+
+	bak_name: string
+	bak_name, err = strings.concatenate({fp, ".bak"}, context.temp_allocator)
+
+	if err != .None {
+		log.errorf("Failed to concatenate strings: ", fp, " and ", ".bak")
+		return
+	}
+
 	check(os.write_entire_file("tempscene.scene", data), "Writing Temp Scene")
-	fp := strings.concatenate({scene.name, ".scene"}, context.temp_allocator)
-	check(os.copy_file(fp, "tempscene.scene"), "Writing Scene")
+
+	os.remove(bak_name)
+	os.rename(fp, bak_name)
+	os.rename("tempscene.scene", fp)
 }

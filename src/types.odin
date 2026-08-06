@@ -8,11 +8,14 @@ import b3 "vendor:box3d"
 import vk "vendor:vulkan"
 
 ENABLE_VALIDATION :: #config(ENABLE_VALIDATION, ODIN_DEBUG)
+EDITOR :: #config(EDITOR, true)
 FIF :: 2
 SHADER_PATH :: "shaders/"
 
 SHADER_FULLSCREEN :: #load("../build/lin/fullscreen.spv")
 SHADER_DEFAULT :: #load("../build/lin/default.spv")
+SHADER_IMGUI_VERT :: #load("../build/lin/imgui_vert.spv")
+SHADER_IMGUI_FRAG :: #load("../build/lin/imgui_frag.spv")
 PHYSICS_TIMESTEP :: f32(1.0) / f32(60.0)
 
 Handle :: hm.Handle64
@@ -61,13 +64,13 @@ Camera :: struct {
 
 Entity_Flags :: bit_set[Entity_Flag]
 Entity_Flag :: enum {
-	TRANSFORM,
-	MESH_RENDERER,
-	RIGIDBODY,
-	SPOT_LIGHT,
-	POINT_LIGHT,
-	DIRECTIONAL_LIGHT,
-	CAMERA,
+	Transform,
+	Mesh_Renderer,
+	Rigidbody,
+	Spot_Light,
+	Point_Light,
+	Directional_light,
+	Camera,
 }
 
 Mesh_Uniforms :: struct {
@@ -77,15 +80,24 @@ Mesh_Uniforms :: struct {
 	entity_handle: Handle,
 }
 
+Component :: struct {}
+
+
+Spotlight :: struct {
+	using _: Component,
+}
+
+
 Entity :: struct {
 	mesh_renderer: Mesh_Renderer,
 	transform:     Transform,
 	rigidbody:     Rigidbody,
+	comps:         [dynamic]Component,
 	camera:        Camera,
+	name:          string,
 	handle:        Handle,
 	parent:        Handle,
 	children:      [dynamic]Handle,
-	name:          string,
 	flags:         Entity_Flags,
 }
 
@@ -131,6 +143,7 @@ Scene :: struct {
 	name:     string,
 	entities: hm.Dynamic_Handle_Map(Entity, Handle),
 }
+
 
 Mesh :: struct {
 	vertex_count: u64,
@@ -191,6 +204,7 @@ Renderer :: struct {
 	post_pipeline_layout:    vk.PipelineLayout,
 	default_shader:          vk.ShaderModule,
 	post_shader:             vk.ShaderModule,
+	imgui_shader:            vk.ShaderModule,
 	depth_format:            vk.Format,
 	swap_format:             vk.Format,
 	messenger:               vk.DebugUtilsMessengerEXT,
@@ -208,7 +222,7 @@ Renderer :: struct {
 	depth_image:             Image,
 	post_settings:           Post_Settings,
 	per_frame_uniform:       Frame_Uniforms,
-	picking_hits:            Picking_Data,
+	picker:                  Picking_Data,
 	post_size:               [2]u32,
 	swap_count:              u32,
 	gfx_q_family:            u32,

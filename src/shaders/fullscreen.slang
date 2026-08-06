@@ -36,55 +36,41 @@ VSOutput vertMain(uint vertex_id: SV_VertexID)
 }
 
 [shader("fragment")]
-float4 fragMain(VSOutput input, float4 frag_coord: SV_Position)
+float4 fragMain(VSOutput input, float4 coord: SV_Position)
 {
 	float3 color = tex.Sample(sampler, input.UV).rgb;
 
 	if (post.enable_crt) {
-		float2 uv = input.UV / 3.0;
-		float4 coord = frag_coord;
+		float sub_pix_size = post.pixel_size.x / 3.0;
+		float sub_pix_x = fmod(coord.x, post.pixel_size.x);
+		float pix_y = fmod(coord.y, post.pixel_size.y);
 
-		// float2 pixel_size = float2(3.0, 3.0);
+		float r_thresh = sub_pix_size;
+		float g_thresh = sub_pix_size * 2.0;
+		float b_thresh = sub_pix_size * 3.0;
 
-		float p_norm = fmod(coord.x, post.pixel_size.x);
-		float sub_pix_size_x = post.pixel_size.x / 3.0;
-		float p_norm_y = fmod(coord.y, post.pixel_size.y);
-
-		float r_thresh = sub_pix_size_x;
-		float g_thresh = sub_pix_size_x * 2.0;
-		float b_thresh = sub_pix_size_x * 3.0;
+		float r_step = step(sub_pix_x, r_thresh);
+		float g_step = step(sub_pix_x, g_thresh) - r_step;
+		float b_step = step(sub_pix_x, b_thresh) - r_step - g_step;
 
 		float x_fade = post.fade.x;
-		if (p_norm < r_thresh) {
-			color = float3(color.r, 0.0, 0.0);
-			float x_thresh = sub_pix_size_x * x_fade;
-			float dist = abs(p_norm - (sub_pix_size_x * 0.5));
-			float m = x_thresh - dist;
-			color *= (m / x_thresh);
-			color.r = max(color.r, post.min_brightness.r);
-		} else if (p_norm < g_thresh) {
-			color = float3(0.0, color.g, 0.0);
-			float x_thresh = sub_pix_size_x * x_fade;
-			float dist = abs((p_norm - (r_thresh)) - sub_pix_size_x * 0.5);
-			float m = x_thresh - dist;
-			color *= (m / x_thresh);
-			color.b = max(color.b, post.min_brightness.b);
-		} else {
-			color = float3(0.0, 0.0, color.b);
-			float x_thresh = sub_pix_size_x * x_fade;
-			float dist = abs((p_norm - (g_thresh)) - sub_pix_size_x * 0.5);
-			float m = x_thresh - dist;
-			color *= (m / x_thresh);
-			color.g = max(color.g, post.min_brightness.g);
-		}
+		float dist_offset = sub_pix_x - sub_pix_size * 0.5;
+		sub_pix_size *= x_fade;
 
-		float y_thres = post.pixel_size.y * post.fade.y;
-		float dist = abs(p_norm_y - (post.pixel_size.y * 0.5));
+		float m = sub_pix_size - abs(dist_offset);
+		color.r *= (m / (sub_pix_size * x_fade)) * r_step;
 
-		if (dist < y_thres) {
-			float m = y_thres - dist;
-			color *= 1.0 - (m / y_thres);
-		}
+		m = sub_pix_size - abs(dist_offset - r_thresh);
+		color.g *= (m / (sub_pix_size * x_fade)) * g_step;
+
+		m = sub_pix_size - abs(dist_offset - g_thresh);
+		color.b *= (m / (sub_pix_size * x_fade)) * b_step;
+
+		float y_thresh = post.pixel_size.y * post.fade.y;
+		float dist = abs(pix_y - post.pixel_size.y * 0.5);
+
+		m = y_thresh - dist;
+		color *= 1.0 - (m / y_thresh);
 	}
 
 	return float4(color.rgb, 1.0);

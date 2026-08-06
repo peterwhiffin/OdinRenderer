@@ -50,6 +50,8 @@ swapchain_update :: proc(ren: ^Renderer, win: ^Window) {
 		vk.DestroyImageView(ren.device, img.view, nil)
 	}
 
+	delete(old_img)
+
 	// for i in 0 ..< FIF {
 	// 	vma.DestroyImage(
 	// 		ren.allocator,
@@ -113,8 +115,7 @@ swapchain_create :: proc(ren: ^Renderer, win: ^Window, old: vk.SwapchainKHR = 0)
 	check(vk.GetSwapchainImagesKHR(ren.device, ren.swapchain, &image_count, nil))
 	ren.swap_count = image_count
 	ren.swap_images = make([]Image, image_count)
-	img_temp := make([]vk.Image, image_count)
-	defer delete(img_temp)
+	img_temp := make([]vk.Image, image_count, context.temp_allocator)
 
 	check(vk.GetSwapchainImagesKHR(ren.device, ren.swapchain, &image_count, &img_temp[0]))
 

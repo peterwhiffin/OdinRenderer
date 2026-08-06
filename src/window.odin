@@ -2,6 +2,7 @@ package main
 
 import "../../odin-imgui/imgui_impl_sdl3"
 import "core:c"
+import hm "core:container/handle_map"
 
 import sdl "vendor:sdl3"
 
@@ -54,10 +55,10 @@ Control :: union {
 }
 
 Action_State :: enum {
-	STARTED,
-	PERFORMING,
-	ENDED,
-	SLEEPING,
+	Started,
+	Performing,
+	Ended,
+	Sleeping,
 }
 
 Input_Action :: struct {
@@ -131,7 +132,7 @@ window_init :: proc(win: ^Window, input: ^Input) {
 	win.spin_threshold = 1_000_000
 }
 
-update_controls :: proc(ctl: []Input_Action) {
+input_update_controls :: proc(ctl: []Input_Action) {
 	profile_scoped()
 	for &action in ctl {
 		ov := action.value
@@ -152,16 +153,16 @@ update_controls :: proc(ctl: []Input_Action) {
 		}
 
 		switch action.state {
-		case .STARTED:
-			if active do action.state = .PERFORMING
-			else do action.state = .ENDED
-		case .PERFORMING:
-			if !active do action.state = .ENDED
-		case .ENDED:
-			if active do action.state = .STARTED
-			else do action.state = .SLEEPING
-		case .SLEEPING:
-			if active do action.state = .STARTED
+		case .Started:
+			if active do action.state = .Performing
+			else do action.state = .Ended
+		case .Performing:
+			if !active do action.state = .Ended
+		case .Ended:
+			if active do action.state = .Started
+			else do action.state = .Sleeping
+		case .Sleeping:
+			if active do action.state = .Started
 		}
 
 		if (os != action.state || ov != action.value) && action.callback != nil {
@@ -171,7 +172,14 @@ update_controls :: proc(ctl: []Input_Action) {
 	}
 }
 
-poll_events :: proc(ren: ^Renderer, win: ^Window, input: ^Input, cam: ^Camera) {
+poll_events :: proc(
+	ren: ^Renderer,
+	win: ^Window,
+	input: ^Input,
+	editor: ^Editor,
+	game: ^Game,
+	scene: ^Scene,
+) {
 	profile_scoped()
 	buttons := sdl.GetMouseState(&input.relative_mouse_pos.x, &input.relative_mouse_pos.y)
 	input.m0 = sdl.MouseButtonFlag.LEFT in buttons
@@ -190,9 +198,18 @@ poll_events :: proc(ren: ^Renderer, win: ^Window, input: ^Input, cam: ^Camera) {
 			input.mouse_delta.x += event.motion.xrel
 			input.mouse_delta.y += event.motion.yrel
 		case .WINDOW_RESIZED:
+			cam_e := hm.get(&editor.gizmo_scene.entities, editor.cam)
+			scene_cam := &cam_e.camera
+			game_cam_e := hm.get(&scene.entities, game.main_camera)
+			game_cam := &game_cam_e.camera
 			w, h: c.int
+
 			sdl.GetWindowSize(win.sdl_win, &w, &h)
-			cam.aspect = f32(w) / f32(h)
+			aspect := f32(w) / f32(h)
+
+			scene_cam.aspect = aspect
+			game_cam.aspect = aspect
+
 			ren.update_swap = true
 		}
 	}

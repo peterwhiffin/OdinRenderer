@@ -3,6 +3,7 @@ package main
 import imgui "../../odin-imgui"
 import "../../odin-imgui/imgui_impl_vulkan"
 import hm "core:container/handle_map"
+import "core:fmt"
 import "core:math/linalg"
 import "core:mem"
 import "core:slice"
@@ -26,6 +27,7 @@ draw_forward :: proc(
 	win: ^Window,
 	cam: ^Camera,
 	s: ^Scene,
+	editor: ^Editor,
 ) {
 	profile_scoped()
 	frame := ren.frame_index
@@ -135,7 +137,7 @@ draw_forward :: proc(
 		1,
 		&ren.desc_set_tex,
 		0,
-		&offset,
+		{},
 	)
 
 
@@ -153,12 +155,25 @@ draw_forward :: proc(
 		&pc,
 	)
 
+	vk.CmdBindDescriptorSets(
+		cmd,
+		.GRAPHICS,
+		ren.forward_pipeline_layout,
+		2,
+		1,
+		&ren.desc_set_pick[frame],
+		0,
+		nil,
+	)
+
 	voffset: vk.DeviceSize = 0
 
 	it := hm.iterator_make(&s.entities)
+	draw_transfrom_gizmo := false
+
 
 	for e, h in hm.iterate(&it) {
-		if .MESH_RENDERER not_in e.flags do continue
+		if .Mesh_Renderer not_in e.flags do continue
 
 		mr := &e.mesh_renderer
 		m := mr.mesh
@@ -169,8 +184,14 @@ draw_forward :: proc(
 		vk.CmdBindIndexBuffer(cmd, m.buffer.buff, vk.DeviceSize(m.index_offset), .UINT32)
 
 		color: [4]f32 = mr.color
-		if h == ren.selected_entity {
-			color = {1.0, 0.0, 1.0, 1.0}
+
+
+		if ren.selected_entity != {} {
+			draw_transfrom_gizmo = true
+
+			if h == ren.selected_entity {
+				color = {1.0, 0.0, 1.0, 1.0}
+			}
 		}
 
 
@@ -195,16 +216,6 @@ draw_forward :: proc(
 			nil,
 		)
 
-		vk.CmdBindDescriptorSets(
-			cmd,
-			.GRAPHICS,
-			ren.forward_pipeline_layout,
-			2,
-			1,
-			&ren.desc_set_pick[frame],
-			0,
-			nil,
-		)
 
 		for &sm, i in mr.mesh.submeshes {
 			pc: Push_Constants = {
@@ -220,6 +231,74 @@ draw_forward :: proc(
 				size_of(Push_Constants),
 				&pc,
 			)
+
+			vk.CmdDrawIndexed(cmd, u32(sm.index_count), 1, u32(sm.index_offset), 0, 0)
+		}
+	}
+
+
+	it = hm.iterator_make(&editor.gizmo_scene.entities)
+	for e, h in hm.iterate(&it) {
+		if .Mesh_Renderer not_in e.flags do continue
+
+		mr := &e.mesh_renderer
+		m := mr.mesh
+
+
+		voffset: vk.DeviceSize = 0
+		vk.CmdBindVertexBuffers(cmd, 0, 1, &m.buffer.buff, &voffset)
+		vk.CmdBindIndexBuffer(cmd, m.buffer.buff, vk.DeviceSize(m.index_offset), .UINT32)
+
+		color: [4]f32 = mr.color
+
+
+		if ren.selected_entity != {} {
+			draw_transfrom_gizmo = true
+
+			if h == ren.selected_entity {
+				color = {1.0, 0.0, 1.0, 1.0}
+			}
+		}
+
+
+		muni: Mesh_Uniforms = {
+			model         = e.transform.world_transform,
+			normal_matrix = mr.normal_matrix,
+			color         = color,
+			entity_handle = h,
+		}
+
+
+		mem.copy(mr.uniform_buffers[frame].alloc_info.pMappedData, &muni, size_of(Mesh_Uniforms))
+
+		vk.CmdBindDescriptorSets(
+			cmd,
+			.GRAPHICS,
+			ren.forward_pipeline_layout,
+			1,
+			1,
+			&mr.desc_sets[frame],
+			0,
+			nil,
+		)
+
+
+		for &sm, i in mr.mesh.submeshes {
+			pc: Push_Constants = {
+				addr      = ren.test_buff[frame].address,
+				tex_index = sm.tex_index,
+			}
+
+			vk.CmdPushConstants(
+				cmd,
+				ren.forward_pipeline_layout,
+				{.FRAGMENT, .VERTEX},
+				0,
+				size_of(Push_Constants),
+				&pc,
+			)
+
+			fmt.println("Drawing Gizmos!")
 
 			vk.CmdDrawIndexed(cmd, u32(sm.index_count), 1, u32(sm.index_offset), 0, 0)
 		}
@@ -321,6 +400,9 @@ draw_post :: proc(cmd: vk.CommandBuffer, ren: ^Renderer, win: ^Window) {
 
 	vk.CmdDraw(cmd, 3, 1, 0, 0)
 
+	dd := imgui.GetDrawData()
+
+
 	imgui_impl_vulkan.RenderDrawData(imgui.GetDrawData(), cmd)
 	vk.CmdEndRendering(cmd)
 }
@@ -381,7 +463,6 @@ end_frame :: proc(cmd: vk.CommandBuffer, ren: ^Renderer) {
 	}
 
 	vk.CmdPipelineBarrier2(cmd, &pdi)
-
 
 	readback_barrier := vk.BufferMemoryBarrier2 {
 		sType         = .BUFFER_MEMORY_BARRIER_2,
@@ -445,23 +526,19 @@ sort_picking_hits :: proc(ren: ^Renderer) {
 	profile_scoped()
 	selected := cast(^Picking_Data)ren.picking_buffers[ren.frame_index].alloc_info.pMappedData
 
-	mem.copy(
-		&ren.picking_hits.hits,
-		&selected.hits,
-		int(size_of(Picking_Hit) * selected.hit_count),
-	)
+	mem.copy(&ren.picker.hits, &selected.hits, int(size_of(Picking_Hit) * selected.hit_count))
 
-	ren.picking_hits.hit_count = selected.hit_count
+	ren.picker.hit_count = selected.hit_count
 
-	slice.sort_by(ren.picking_hits.hits[:selected.hit_count], sort_hit)
+	slice.sort_by(ren.picker.hits[:selected.hit_count], sort_hit)
 	selected.hit_count = 0
 }
 
-draw_frame :: proc(ren: ^Renderer, win: ^Window, cam: ^Camera, s: ^Scene) {
+draw_frame :: proc(ren: ^Renderer, win: ^Window, cam: ^Camera, s: ^Scene, editor: ^Editor) {
 	profile_scoped()
-	ren.picking_hits.hit_count = 0
+	ren.picker.hit_count = 0
 	cmd := begin_frame(ren)
-	draw_forward(cmd, ren, win, cam, s)
+	draw_forward(cmd, ren, win, cam, s, editor)
 	draw_post(cmd, ren, win)
 	end_frame(cmd, ren)
 	sort_picking_hits(ren)

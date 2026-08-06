@@ -94,8 +94,8 @@ create_depth_image :: proc(ren: ^Renderer, width: u32, height: u32) {
 create_sampler :: proc(ren: ^Renderer) {
 	sci: vk.SamplerCreateInfo = {
 		sType            = .SAMPLER_CREATE_INFO,
-		minFilter        = .LINEAR,
-		magFilter        = .LINEAR,
+		minFilter        = .NEAREST,
+		magFilter        = .NEAREST,
 		mipmapMode       = .LINEAR,
 		anisotropyEnable = true,
 		maxAnisotropy    = 8.0,

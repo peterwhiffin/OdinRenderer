@@ -4,19 +4,28 @@ import imgui "../../odin-imgui"
 import "../../odin-imgui/imgui_impl_sdl3"
 import "../../odin-imgui/imgui_impl_vulkan"
 import hm "core:container/handle_map"
+import "core:fmt"
 import "core:math/linalg"
+import "core:slice"
 import "core:strings"
 import b3 "vendor:box3d"
 import sdl "vendor:sdl3"
 import vk "vendor:vulkan"
 
 Editor_Actions :: enum {
-	MOVEMENT,
+	Movement,
 	M0,
 	M1,
-	SHIFT,
-	LOOK,
-	TOGGLE_UI,
+	Shift,
+	Look,
+	Toggle_UI,
+	Play,
+}
+
+Editor_Mode :: enum {
+	Normal,
+	Camera,
+	Play,
 }
 
 Editor :: struct {
@@ -26,7 +35,9 @@ Editor :: struct {
 	res:             ^Resources,
 	scene:           ^Scene,
 	physics:         ^Physics,
-	cam:             Entity,
+	game:            ^Game,
+	cam:             Handle,
+	gizmo_scene:     Scene,
 	selected_entity: Handle,
 	controls:        [len(Editor_Actions)]Input_Action,
 	fps:             f32,
@@ -37,44 +48,42 @@ Editor :: struct {
 	cam_yaw:         f32,
 	move_speed:      f32,
 	look_sens:       f32,
-	hovering:        bool,
+	hovering_ui:     bool,
 	ui_active:       bool,
+	mode:            Editor_Mode,
 }
 
 get_c_string :: proc(str: string) -> cstring {
 	return strings.clone_to_cstring(str, context.temp_allocator)
 }
 
-update_camera :: proc(editor: ^Editor) {
+editor_move_camera :: proc(editor: ^Editor) {
 	profile_scoped()
 	ren := editor.ren
 	input := editor.input
-	cam := &editor.cam.camera
-	t := &editor.cam.transform
-	look := &editor.controls[Editor_Actions.LOOK]
-	move := &editor.controls[Editor_Actions.MOVEMENT]
+	cam_e := hm.get(&editor.gizmo_scene.entities, editor.cam)
+	cam := &cam_e.camera
+	t := &cam_e.transform
+	look := &editor.controls[Editor_Actions.Look]
+	move := &editor.controls[Editor_Actions.Movement]
 	m1 := &editor.controls[Editor_Actions.M1]
 
-	if m1.state < .ENDED {
-		input.lock_mouse(editor.win.sdl_win, true)
 
-		editor.cam_yaw += look.value.x * editor.look_sens
-		editor.cam_pitch += look.value.y * editor.look_sens
-		rot: [3]f32 = {editor.cam_pitch, editor.cam_yaw, 0.0}
+	editor.cam_yaw += look.value.x * editor.look_sens
+	editor.cam_pitch += look.value.y * editor.look_sens
+	rot: [3]f32 = {editor.cam_pitch, editor.cam_yaw, 0.0}
 
 
-		forward := get_forward(t)
-		right := get_right(t)
-		move_dir := (forward * move.value.y) + (right * move.value.x)
-		new_pos := t.pos + move_dir * editor.move_speed * f32(editor.win.delta_time)
+	forward := get_forward(t)
+	right := get_right(t)
+	move_dir := (forward * move.value.y) + (right * move.value.x)
+	new_pos := t.pos + move_dir * editor.move_speed * f32(editor.win.delta_time)
 
-		set_euler_angles(t, rot)
-		set_position(t, new_pos)
-	} else if editor.controls[Editor_Actions.M1].state == Action_State.ENDED {
-		input.lock_mouse(editor.win.sdl_win, false)
-	}
+	set_euler_angles(t, rot, editor.scene)
+	set_position(t, new_pos, editor.scene)
 
-	update_transform_matrices(&editor.cam, nil)
+
+	// update_transform_matrices(&editor.cam, nil)
 
 	cam.view = linalg.matrix4_inverse(t.world_transform)
 	cam.proj = linalg.matrix4_perspective_f32(
@@ -95,7 +104,7 @@ editor_draw_settings :: proc(editor: ^Editor) {
 	defer imgui.End()
 
 
-	imgui.DragFloat3("cam pos", &editor.cam.transform.pos, 0.01, 0.0, 0.0, "%.2f", {.ColorMarkers})
+	// imgui.DragFloat3("cam pos", &editor.cam.transform.pos, 0.01, 0.0, 0.0, "%.2f", {.ColorMarkers})
 
 	if editor.time_accum >= 1.0 {
 		editor.fps = f32(editor.frame_count) / editor.time_accum
@@ -170,6 +179,17 @@ editor_draw_settings :: proc(editor: ^Editor) {
 		"%.2f",
 		{.ColorMarkers},
 	)
+
+	imgui.DragFloat(
+		"Player Jump Height",
+		&editor.game.player.jump_height,
+		0.01,
+		0.0,
+		1000.0,
+		"%.2f",
+		{.ColorMarkers},
+	)
+
 	imgui.Text("FPS: %.2f", editor.fps)
 	imgui.Text("Frame time: %.2f", editor.frame_time)
 	imgui.Text("Entity count: %u", editor.scene.entities.items.len)
@@ -183,7 +203,11 @@ editor_draw_settings :: proc(editor: ^Editor) {
 					posy := u32(y) * 2
 					posz := u32(z) * 2
 					eh, e := scene_get_new_entity(scene)
-					set_position(&e.transform, {f32(posx), f32(posy + 30.0), f32(posz)})
+					set_position(
+						&e.transform,
+						{f32(posx), f32(posy + 30.0), f32(posz)},
+						editor.scene,
+					)
 					mr := entity_add_mesh(editor.scene, e, editor.ren, editor.res)
 					mr.mesh = editor.res.mesh_map["cube.gltf"]
 					mr.color = {0.0, 1.0, 0.0, 1.0}
@@ -196,6 +220,12 @@ editor_draw_settings :: proc(editor: ^Editor) {
 	if imgui.Button("Save Scene") {
 		write_scene(editor.scene)
 	}
+
+	tex_ref: imgui.TextureRef = {
+		_TexID = 8,
+	}
+
+	// imgui.Image(tex_ref, {100, 100})
 }
 
 cstring_from_buf :: proc(buf: []byte, str: string) -> cstring {
@@ -209,20 +239,18 @@ editor_draw_inspector :: proc(editor: ^Editor) {
 	imgui.Begin("Inspector")
 	defer imgui.End()
 
-	if hm.is_valid(&scene.entities, editor.selected_entity) {
-		e := hm.get(&scene.entities, editor.selected_entity)
-
-		if imgui.IsWindowHovered(0) && editor.controls[Editor_Actions.M1].state == .STARTED {
+	if e, ok := hm.get(&scene.entities, editor.selected_entity); ok {
+		if imgui.IsWindowHovered(0) && editor.controls[Editor_Actions.M1].state == .Started {
 			imgui.OpenPopup("entityctx")
 		}
 
 		if imgui.BeginPopup("entityctx") {
 
-			if imgui.MenuItem("Add Mesh Renderer", nil, false, .MESH_RENDERER not_in e.flags) {
+			if imgui.MenuItem("Add Mesh Renderer", nil, false, .Mesh_Renderer not_in e.flags) {
 				entity_add_mesh(editor.scene, e, editor.ren, editor.res)
 			}
 
-			if imgui.MenuItem("Add Rigidbody", nil, false, .RIGIDBODY not_in e.flags) {
+			if imgui.MenuItem("Add Rigidbody", nil, false, .Rigidbody not_in e.flags) {
 				entity_add_rigidbody(editor.scene, editor.physics, e, .staticBody)
 			}
 
@@ -230,23 +258,22 @@ editor_draw_inspector :: proc(editor: ^Editor) {
 		}
 
 		buf: [256]byte
-
 		name := cstring_from_buf(buf[:], e.name)
+
 		if imgui.InputText("##", name, len(buf)) {
-			delete(e.name)
+			// delete(e.name)
 			e.name = strings.clone_from_cstring(cstring(&buf[0]))
 		}
 
 		if imgui.CollapsingHeader("Transform", {.DefaultOpen, .DrawLinesFull}) {
 			t := &e.transform
-			if imgui.DragFloat3("Pos", &t.pos, 0.01, 0.0, 0.0, "%.3f", {.ColorMarkers}) do set_position(t, t.pos)
-			if imgui.DragFloat3("Rot", &t.euler_angles, 0.01, 0.0, 0.0, "%.3f", {.ColorMarkers}) do set_euler_angles(t, t.euler_angles)
-			if imgui.DragFloat3("Scale", &t.scale, 0.01, 0.0, 0.0, "%.3f", {.ColorMarkers}) do set_scale(t, t.scale)
+			if imgui.DragFloat3("Pos", &t.pos, 0.01, 0.0, 0.0, "%.3f", {.ColorMarkers}) do set_position(t, t.pos, editor.scene)
+			if imgui.DragFloat3("Rot", &t.euler_angles, 0.01, 0.0, 0.0, "%.3f", {.ColorMarkers}) do set_euler_angles(t, t.euler_angles, editor.scene)
+			if imgui.DragFloat3("Scale", &t.scale, 0.01, 0.0, 0.0, "%.3f", {.ColorMarkers}) do set_scale(t, t.scale, editor.scene)
 
 			parent_name: string = "none"
 
-			if hm.is_valid(&scene.entities, e.parent) {
-				p := hm.get(&scene.entities, e.parent)
+			if p, ok := hm.get(&scene.entities, e.parent); ok {
 				parent_name = p.name
 			}
 
@@ -256,8 +283,9 @@ editor_draw_inspector :: proc(editor: ^Editor) {
 					if ent != e {
 						imgui.PushIDPtr(ent)
 						if (imgui.Selectable(get_c_string(ent.name))) {
-							e.parent = h
-							append(&ent.children, editor.selected_entity)
+							// e.parent = h
+							// append(&ent.children, editor.selected_entity)
+							set_parent(e.handle, h, editor.scene)
 						}
 						imgui.PopID()
 					}
@@ -266,7 +294,7 @@ editor_draw_inspector :: proc(editor: ^Editor) {
 			}
 		}
 
-		if .MESH_RENDERER in e.flags {
+		if .Mesh_Renderer in e.flags {
 			mr := &e.mesh_renderer
 
 			if imgui.CollapsingHeader("Mesh Renderer", {.DefaultOpen, .DrawLinesFull}) {
@@ -288,7 +316,7 @@ editor_draw_inspector :: proc(editor: ^Editor) {
 			}
 		}
 
-		if .RIGIDBODY in e.flags {
+		if .Rigidbody in e.flags {
 			rb := &e.rigidbody
 
 			if imgui.CollapsingHeader("Rigidbody", {.DefaultOpen, .DrawLinesFull}) {
@@ -360,28 +388,51 @@ editor_draw_entities :: proc(editor: ^Editor) {
 }
 
 editor_check_pick :: proc(editor: ^Editor) {
-	if editor.controls[Editor_Actions.M0].state == .ENDED {
-		if editor.ren.picking_hits.hit_count != 0 {
-			editor.ren.selected_entity = editor.ren.picking_hits.hits[0].handle
+	if editor.controls[Editor_Actions.M0].state == .Started {
+		if editor.ren.picker.hit_count != 0 {
+			editor.ren.selected_entity = editor.ren.picker.hits[0].handle
 			editor.selected_entity = editor.ren.selected_entity
 		}
 	}
 }
 
+editor_update_normal :: proc(editor: ^Editor) {
+	hover_flags := imgui.HoveredFlags(
+		imgui.HoveredFlags_AnyWindow |
+		imgui.HoveredFlags_AllowWhenBlockedByActiveItem |
+		imgui.HoveredFlags_ChildWindows,
+	)
 
-editor_update :: proc(editor: ^Editor) {
-	profile_scoped()
-	update_controls(editor.controls[:])
-	update_camera(editor)
+	editor.hovering_ui = imgui.IsWindowHovered(hover_flags)
 
-	if editor.controls[Editor_Actions.TOGGLE_UI].state == .STARTED do editor.ui_active = !editor.ui_active
-
-	if !editor.hovering {
+	if !editor.hovering_ui {
 		editor_check_pick(editor)
+		if editor.controls[Editor_Actions.M1].state == .Started {
+			editor.mode = .Camera
+			editor.input.lock_mouse(editor.win.sdl_win, true)
+		}
 	}
 
-	editor.hovering = false
+	if editor.controls[Editor_Actions.Play].state == .Started {
+		editor.mode = .Play
+		editor.input.lock_mouse(editor.win.sdl_win, true)
 
+	}
+}
+
+editor_update_camera :: proc(editor: ^Editor) {
+	editor_move_camera(editor)
+
+	if editor.controls[Editor_Actions.M1].state == .Ended {
+		editor.mode = .Normal
+		editor.input.lock_mouse(editor.win.sdl_win, false)
+	} else if editor.controls[Editor_Actions.Play].state == .Started {
+		editor.mode = .Play
+		editor.input.lock_mouse(editor.win.sdl_win, true)
+	}
+}
+
+editor_draw :: proc(editor: ^Editor) {
 	imgui_impl_sdl3.NewFrame()
 	imgui_impl_vulkan.NewFrame()
 	imgui.NewFrame()
@@ -393,18 +444,43 @@ editor_update :: proc(editor: ^Editor) {
 		editor_draw_inspector(editor)
 	}
 
-	if imgui.IsWindowHovered(
-		imgui.HoveredFlags(
-			imgui.HoveredFlags_AnyWindow |
-			imgui.HoveredFlags_AllowWhenBlockedByActiveItem |
-			imgui.HoveredFlags_ChildWindows,
-		),
-	) {
-		editor.hovering = true
+	imgui.Render()
+}
+
+editor_update_play :: proc(editor: ^Editor) {
+	if editor.controls[Editor_Actions.Play].state == .Started {
+		editor.mode = .Normal
+		editor.input.lock_mouse(editor.win.sdl_win, false)
 	}
 
+	// editor_move_player(editor)
 
-	imgui.Render()
+	game_update(editor.game, editor.scene, editor.input)
+}
+
+editor_update :: proc(editor: ^Editor) -> ^Camera {
+	profile_scoped()
+	cam_e := hm.get(&editor.gizmo_scene.entities, editor.cam)
+	cam := &cam_e.camera
+
+	input_update_controls(editor.controls[:])
+	if editor.controls[Editor_Actions.Toggle_UI].state == .Started do editor.ui_active = !editor.ui_active
+
+	switch editor.mode {
+	case .Normal:
+		editor_update_normal(editor)
+	case .Camera:
+		editor_update_camera(editor)
+	case .Play:
+		editor_update_play(editor)
+		ce := hm.get(&editor.scene.entities, editor.game.main_camera)
+		cam = &ce.camera
+	}
+
+	scene_update_transforms(&editor.gizmo_scene)
+	editor_draw(editor)
+
+	return cam
 }
 
 imgui_init :: proc(editor: ^Editor) {
@@ -428,17 +504,34 @@ imgui_init :: proc(editor: ^Editor) {
 		PipelineRenderingCreateInfo = pri,
 	}
 
+	as_u32v := slice.reinterpret([]u32, SHADER_IMGUI_VERT)
+	as_u32f := slice.reinterpret([]u32, SHADER_IMGUI_FRAG)
+
+	mciv: vk.ShaderModuleCreateInfo = {
+		sType    = .SHADER_MODULE_CREATE_INFO,
+		codeSize = len(SHADER_IMGUI_VERT),
+		pCode    = raw_data(as_u32v),
+	}
+
+	mcif: vk.ShaderModuleCreateInfo = {
+		sType    = .SHADER_MODULE_CREATE_INFO,
+		codeSize = len(SHADER_IMGUI_FRAG),
+		pCode    = raw_data(as_u32f),
+	}
+
 	init_info: imgui_impl_vulkan.InitInfo = {
-		Instance            = editor.ren.instance,
-		PhysicalDevice      = editor.ren.physical,
-		Device              = editor.ren.device,
-		QueueFamily         = editor.ren.gfx_q_family,
-		Queue               = editor.ren.gfx_q,
-		DescriptorPoolSize  = 100,
-		UseDynamicRendering = true,
-		PipelineInfoMain    = pi,
-		MinImageCount       = 2,
-		ImageCount          = 2,
+		Instance                   = editor.ren.instance,
+		PhysicalDevice             = editor.ren.physical,
+		Device                     = editor.ren.device,
+		QueueFamily                = editor.ren.gfx_q_family,
+		Queue                      = editor.ren.gfx_q,
+		DescriptorPoolSize         = 100,
+		UseDynamicRendering        = true,
+		PipelineInfoMain           = pi,
+		MinImageCount              = 2,
+		ImageCount                 = 2,
+		CustomShaderVertCreateInfo = mciv,
+		CustomShaderFragCreateInfo = mcif,
 	}
 
 	imgui_impl_vulkan.LoadFunctions(vk.API_VERSION_1_4, imgui_vulkan_callback, rawptr(editor))
@@ -463,6 +556,46 @@ imgui_vulkan_callback :: proc "c" (
 	return nil
 }
 
+editor_init_gizmos :: proc(editor: ^Editor) {
+	center_h, center_e := scene_get_new_entity(&editor.gizmo_scene)
+	x_h, x_e := scene_get_new_entity(&editor.gizmo_scene)
+	y_h, y_e := scene_get_new_entity(&editor.gizmo_scene)
+	z_h, z_e := scene_get_new_entity(&editor.gizmo_scene)
+
+	mrc := entity_add_mesh(&editor.gizmo_scene, center_e, editor.ren, editor.res)
+	mrx := entity_add_mesh(&editor.gizmo_scene, x_e, editor.ren, editor.res)
+	mry := entity_add_mesh(&editor.gizmo_scene, y_e, editor.ren, editor.res)
+	mrz := entity_add_mesh(&editor.gizmo_scene, z_e, editor.ren, editor.res)
+
+	mrc.color = {0.3, 0.3, 0.3, 1.0}
+	mrx.color = {1.0, 0.0, 0.0, 1.0}
+	mry.color = {0.0, 1.0, 0.0, 1.0}
+	mrz.color = {0.0, 0.0, 1.0, 1.0}
+
+	length: f32 = 3.0
+	width: f32 = 0.1
+
+
+	offset := length
+
+
+	set_position(&x_e.transform, {offset, 0.0, 0.0}, &editor.gizmo_scene)
+	set_position(&y_e.transform, {0.0, offset, 0.0}, &editor.gizmo_scene)
+	set_position(&z_e.transform, {0.0, 0.0, offset}, &editor.gizmo_scene)
+
+	set_scale(&center_e.transform, {0.15, 0.15, 0.15}, &editor.gizmo_scene)
+	set_scale(&x_e.transform, {length, width, width}, &editor.gizmo_scene)
+	set_scale(&y_e.transform, {width, length, width}, &editor.gizmo_scene)
+	set_scale(&z_e.transform, {width, width, length}, &editor.gizmo_scene)
+
+
+	set_parent(x_h, center_h, &editor.gizmo_scene)
+	set_parent(y_h, center_h, &editor.gizmo_scene)
+	set_parent(z_h, center_h, &editor.gizmo_scene)
+	//
+	set_position(&center_e.transform, {0.0, 10.0, 0.0}, &editor.gizmo_scene)
+}
+
 editor_init :: proc(
 	editor: ^Editor,
 	win: ^Window,
@@ -471,6 +604,7 @@ editor_init :: proc(
 	res: ^Resources,
 	phys: ^Physics,
 	scene: ^Scene,
+	game: ^Game,
 ) {
 	editor.win = win
 	editor.input = input
@@ -478,22 +612,25 @@ editor_init :: proc(
 	editor.res = res
 	editor.physics = phys
 	editor.scene = scene
+	editor.game = game
 
-	editor.cam.transform.world_transform = linalg.MATRIX4F32_IDENTITY
-	editor.cam.transform.pos = {0.0, 15.0, -10.0}
-	editor.cam.transform.rot = linalg.QUATERNIONF32_IDENTITY
-	editor.cam.transform.scale = {1.0, 1.0, 1.0}
-	// editor.cam.transform.entity = &editor.cam
-	cam := &editor.cam.camera
-	cam.aspect = 800.0 / 600.0
-	cam.fov = 78.0
-	cam.near = 0.1
-	cam.far = 10000
+	scene_init(&editor.gizmo_scene)
+
+	cam_e: ^Entity
+	editor.cam, cam_e = scene_get_new_entity(&editor.gizmo_scene)
+	entity_add_camera(cam_e, editor.win)
+
+	// cam := &editor.cam.camera
+	// cam.aspect = 800.0 / 600.0
+	// cam.fov = 78.0
+	// cam.near = 0.1
+	// cam.far = 10000
 
 	editor.look_sens = 0.08
 	editor.move_speed = 8.0
+	// editor.play_move_speed = 5.0
 
-	editor.controls[Editor_Actions.MOVEMENT].control = Control_Axis2 {
+	editor.controls[Editor_Actions.Movement].control = Control_Axis2 {
 		x = {
 			negative = &input.sdl_keys[sdl.Scancode.A],
 			positive = &input.sdl_keys[sdl.Scancode.D],
@@ -504,14 +641,18 @@ editor_init :: proc(
 		},
 	}
 
-	editor.controls[Editor_Actions.LOOK].control = Control_Pointer {
+	editor.controls[Editor_Actions.Look].control = Control_Pointer {
 		x = &input.mouse_delta.x,
 		y = &input.mouse_delta.y,
 	}
 
 	editor.controls[Editor_Actions.M0].control = &input.m0
 	editor.controls[Editor_Actions.M1].control = &input.m1
-	editor.controls[Editor_Actions.TOGGLE_UI].control = &input.sdl_keys[sdl.Scancode.F1]
+	editor.controls[Editor_Actions.Toggle_UI].control = &input.sdl_keys[sdl.Scancode.F1]
+	editor.controls[Editor_Actions.Play].control = &input.sdl_keys[sdl.Scancode.F2]
 
+	editor.mode = .Camera
+
+	editor_init_gizmos(editor)
 	imgui_init(editor)
 }

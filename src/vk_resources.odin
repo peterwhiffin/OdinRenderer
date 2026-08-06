@@ -179,7 +179,7 @@ load_gltf :: proc(
 
 	for &img, i in data.images {
 		image_indices[&img] = u32(i)
-		img_path, err := filepath.join({dir, string(img.uri)})
+		img_path, err := filepath.join({dir, string(img.uri)}, context.temp_allocator)
 		cpath := strings.clone_to_cstring(img_path, context.temp_allocator)
 		new_img := get_new_image(res)
 		load_image(ren, res, new_img, cpath)
