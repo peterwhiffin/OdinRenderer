@@ -54,6 +54,7 @@ Transform :: struct {
 }
 
 Camera :: struct {
+	entity: Handle,
 	view:   linalg.Matrix4x4f32,
 	proj:   linalg.Matrix4x4f32,
 	fov:    f32,
@@ -200,8 +201,10 @@ Renderer :: struct {
 	sampler:                 vk.Sampler,
 	forward_pipeline:        vk.Pipeline,
 	post_pipeline:           vk.Pipeline,
+	gizmo_pipeline:          vk.Pipeline,
 	forward_pipeline_layout: vk.PipelineLayout,
 	post_pipeline_layout:    vk.PipelineLayout,
+	gizmo_pipeline_layout:   vk.PipelineLayout,
 	default_shader:          vk.ShaderModule,
 	post_shader:             vk.ShaderModule,
 	imgui_shader:            vk.ShaderModule,

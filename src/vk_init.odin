@@ -328,7 +328,7 @@ renderer_init :: proc(ren: ^Renderer, win: ^Window, res: ^Resources) {
 	create_picking_buffers(ren)
 
 	aspect: f32 = 1920.0 / 1080.0
-	h: f32 = 360.0
+	h: f32 = 1080.0
 	ren.post_size = {u32(h * aspect), u32(h)}
 	ren.forward_images = make([]Image, FIF)
 	create_forward_images(ren, win)
@@ -356,6 +356,8 @@ renderer_init :: proc(ren: ^Renderer, win: ^Window, res: ^Resources) {
 
 	ren.forward_pipeline, ren.forward_pipeline_layout = create_pipeline(ren)
 	ren.post_pipeline, ren.post_pipeline_layout = create_post_pipeline(ren)
+	ren.gizmo_pipeline, ren.gizmo_pipeline_layout = create_gizmo_pipeline(ren)
+
 
 	ren.test_buff = make([]Buffer, FIF)
 

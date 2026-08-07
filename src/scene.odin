@@ -110,6 +110,7 @@ scene_get_new_entity :: proc(s: ^Scene) -> (Handle, ^Entity) {
 
 entity_add_camera :: proc(e: ^Entity, win: ^Window) -> ^Camera {
 	e.flags += {.Camera}
+	e.camera.entity = e.handle
 	e.camera.fov = 78.0
 	e.camera.near = 0.1
 	e.camera.far = 600.0

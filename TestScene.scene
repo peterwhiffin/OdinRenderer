@@ -260,7 +260,7 @@ entities = [
 		children = [
 
 		]
-		flags = 7
+		flags = 3
 		transform = {
 			pos = [
 				0.00000000

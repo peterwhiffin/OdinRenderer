@@ -4,8 +4,10 @@ import imgui "../../odin-imgui"
 import "../../odin-imgui/imgui_impl_sdl3"
 import "../../odin-imgui/imgui_impl_vulkan"
 import hm "core:container/handle_map"
+import "core:crypto/poly1305"
 import "core:fmt"
-import "core:math/linalg"
+import "core:math"
+import la "core:math/linalg"
 import "core:slice"
 import "core:strings"
 import b3 "vendor:box3d"
@@ -28,29 +30,39 @@ Editor_Mode :: enum {
 	Play,
 }
 
+
 Editor :: struct {
-	ren:             ^Renderer,
-	win:             ^Window,
-	input:           ^Input,
-	res:             ^Resources,
-	scene:           ^Scene,
-	physics:         ^Physics,
-	game:            ^Game,
-	cam:             Handle,
-	gizmo_scene:     Scene,
-	selected_entity: Handle,
-	controls:        [len(Editor_Actions)]Input_Action,
-	fps:             f32,
-	time_accum:      f32,
-	frame_time:      f32,
-	frame_count:     u32,
-	cam_pitch:       f32,
-	cam_yaw:         f32,
-	move_speed:      f32,
-	look_sens:       f32,
-	hovering_ui:     bool,
-	ui_active:       bool,
-	mode:            Editor_Mode,
+	ren:               ^Renderer,
+	win:               ^Window,
+	input:             ^Input,
+	res:               ^Resources,
+	scene:             ^Scene,
+	physics:           ^Physics,
+	game:              ^Game,
+	cam:               Handle,
+	gizmo_scene:       Scene,
+	transform_gizmo:   Handle,
+	x_gizmo:           Handle,
+	y_gizmo:           Handle,
+	z_gizmo:           Handle,
+	selected_entity:   Handle,
+	selected_gizmo:    Handle,
+	controls:          [len(Editor_Actions)]Input_Action,
+	initial_hit_axis:  f32,
+	original_drag_pos: [3]f32,
+	transform_speed:   f32,
+	fps:               f32,
+	time_accum:        f32,
+	frame_time:        f32,
+	frame_count:       u32,
+	cam_pitch:         f32,
+	cam_yaw:           f32,
+	move_speed:        f32,
+	look_sens:         f32,
+	gizmo_scale:       f32,
+	hovering_ui:       bool,
+	ui_active:         bool,
+	mode:              Editor_Mode,
 }
 
 get_c_string :: proc(str: string) -> cstring {
@@ -85,9 +97,9 @@ editor_move_camera :: proc(editor: ^Editor) {
 
 	// update_transform_matrices(&editor.cam, nil)
 
-	cam.view = linalg.matrix4_inverse(t.world_transform)
-	cam.proj = linalg.matrix4_perspective_f32(
-		linalg.to_radians(cam.fov),
+	cam.view = la.matrix4_inverse(t.world_transform)
+	cam.proj = la.matrix4_perspective_f32(
+		la.to_radians(cam.fov),
 		cam.aspect,
 		cam.near,
 		cam.far,
@@ -189,6 +201,18 @@ editor_draw_settings :: proc(editor: ^Editor) {
 		"%.2f",
 		{.ColorMarkers},
 	)
+
+	imgui.DragFloat(
+		"Transform Speed",
+		&editor.transform_speed,
+		0.00001,
+		0.0,
+		1000.0,
+		"%.5f",
+		{.ColorMarkers},
+	)
+
+	imgui.DragFloat("Gizmo Scale", &editor.gizmo_scale, 0.001, 0.0, 10.0, "%.3f", {.ColorMarkers})
 
 	imgui.Text("FPS: %.2f", editor.fps)
 	imgui.Text("Frame time: %.2f", editor.frame_time)
@@ -390,13 +414,85 @@ editor_draw_entities :: proc(editor: ^Editor) {
 editor_check_pick :: proc(editor: ^Editor) {
 	if editor.controls[Editor_Actions.M0].state == .Started {
 		if editor.ren.picker.hit_count != 0 {
-			editor.ren.selected_entity = editor.ren.picker.hits[0].handle
-			editor.selected_entity = editor.ren.selected_entity
+			for i in 0 ..< editor.ren.picker.hit_count {
+				hit := editor.ren.picker.hits[i].handle
+
+				if hit == editor.x_gizmo {
+					editor.selected_gizmo = editor.x_gizmo
+				} else if hit == editor.y_gizmo {
+
+				} else if hit == editor.z_gizmo {
+				} else if hit == editor.x_gizmo {
+
+				} else if hit == editor.transform_gizmo {
+
+				} else {
+					editor.ren.selected_entity = editor.ren.picker.hits[0].handle
+					editor.selected_entity = editor.ren.selected_entity
+				}
+			}
+
 		}
 	}
 }
 
+intersect_ray_plane :: proc(n: [3]f32, p0: [3]f32, l0: [3]f32, l: [3]f32) -> ([3]f32, bool) {
+	//plane is described by point p0, which is it's world space position/origin
+	//and a normal N, the planes orientation. The normal of the world xy plane would be the world z axis
+	//you can derive a vector on the plane from any point(p) by subtracting p0 from p
+	//
+	//dot product of two perpendicular vectors is 0
+	// (p - p0) dot n = 0
+	//
+	// ray is an origin and a direction, and we will use a scalar t to define magnitude/distance
+	// l0 is ray origin. l is ray direction. t is scalar
+	// l0 + l * t = p
+	//
+	// if the ray intersects the plane, they share a point(p) at the intersection.
+	// substitue ray equation.
+	// (l0 + l * t - p0) dot n = 0
+	//
+	// we want to find a t that results in an intersection
+	// t = ((p0 - l0) dot n) / (l dot n)
+	//
+	// when l dot n approaches 0(ray direction and plane normal are perpendicular), the plane is parallel with the ray.
+	// we need an epsilon to prevent dividing by zero
+	//
+	// vectors need to be normalized
+
+	intersects := false
+	hit_point: [3]f32
+	epsilon: f32 = 1e-6
+	t: f32
+
+	denom := la.dot(n, l)
+
+	// abs to account for rays approaching from either side of the plane
+	if (la.abs(denom) > epsilon) {
+		p0_l0 := p0 - l0
+		t = la.dot(p0_l0, n) / denom
+		intersects = t >= 0
+		hit_point = l0 + l * t
+	}
+
+	return hit_point, intersects
+}
+
+screen_to_ray :: proc(cam: ^Camera, screen_pos: [2]f32, scene: ^Scene, win: ^Window) -> [3]f32 {
+	ce := entity_get(cam.entity, scene)
+	norm := screen_pos / {f32(win.w), f32(win.h)}
+	ndc := norm * 2.0 - 1.0
+	clip: [4]f32 = {ndc.x, ndc.y, -1.0, 1.0}
+	view := la.matrix4_inverse(ce.camera.proj) * clip
+	view = {view.x, view.y, -1.0, 0.0}
+	ray_dir := la.matrix4_inverse(ce.camera.view) * view
+	return la.normalize(ray_dir.xyz)
+}
+
 editor_update_normal :: proc(editor: ^Editor) {
+
+	// se := entity_get(editor.selected_entity, editor.scene)
+
 	hover_flags := imgui.HoveredFlags(
 		imgui.HoveredFlags_AnyWindow |
 		imgui.HoveredFlags_AllowWhenBlockedByActiveItem |
@@ -411,6 +507,68 @@ editor_update_normal :: proc(editor: ^Editor) {
 			editor.mode = .Camera
 			editor.input.lock_mouse(editor.win.sdl_win, true)
 		}
+
+
+		if editor.selected_gizmo == editor.x_gizmo {
+			if editor.controls[Editor_Actions.M0].state < .Ended {
+				se := entity_get(editor.selected_entity, editor.scene)
+				ce := entity_get(editor.cam, &editor.gizmo_scene)
+
+				if editor.controls[Editor_Actions.M0].state == .Started {
+					editor.original_drag_pos = se.transform.pos
+
+					ray := screen_to_ray(
+						&ce.camera,
+						editor.input.relative_mouse_pos,
+						&editor.gizmo_scene,
+						editor.win,
+					)
+
+					hit, ok := intersect_ray_plane(
+						{0.0, 0.0, 1.0},
+						se.transform.pos,
+						ce.transform.pos,
+						ray,
+					)
+
+					editor.initial_hit_axis = la.dot(hit - se.transform.pos, [3]f32{1.0, 0.0, 0.0})
+					fmt.println("Setting initial hit")
+				} else {
+
+					ray := screen_to_ray(
+						&ce.camera,
+						editor.input.relative_mouse_pos,
+						&editor.gizmo_scene,
+						editor.win,
+					)
+					hit, ok := intersect_ray_plane(
+						{0.0, 0.0, 1.0},
+						editor.original_drag_pos,
+						ce.transform.pos,
+						ray,
+					)
+
+					current_hit_axis := la.dot(
+						hit - editor.original_drag_pos,
+						[3]f32{1.0, 0.0, 0.0},
+					)
+					// delta := current_hit_axis - editor.initial_hit_axis
+					delta := editor.initial_hit_axis - current_hit_axis
+					set_position(
+						&se.transform,
+						editor.original_drag_pos + [3]f32{1.0, 0.0, 0.0} * delta,
+						editor.scene,
+					)
+
+				}
+
+
+			} else {
+				editor.selected_gizmo = {}
+			}
+		}
+
+
 	}
 
 	if editor.controls[Editor_Actions.Play].state == .Started {
@@ -458,6 +616,23 @@ editor_update_play :: proc(editor: ^Editor) {
 	game_update(editor.game, editor.scene, editor.input)
 }
 
+editor_update_gizmo :: proc(editor: ^Editor) {
+	if editor.selected_entity != {} {
+		gizmo_e := hm.get(&editor.gizmo_scene.entities, editor.transform_gizmo)
+		selected_e := hm.get(&editor.scene.entities, editor.selected_entity)
+		set_position(&gizmo_e.transform, selected_e.transform.pos, &editor.gizmo_scene)
+		set_rotation(&gizmo_e.transform, selected_e.transform.rot, &editor.gizmo_scene)
+	}
+
+
+	ce := entity_get(editor.cam, &editor.gizmo_scene)
+	ge := entity_get(editor.transform_gizmo, &editor.gizmo_scene)
+
+	dist := la.distance(ce.transform.pos, ge.transform.pos)
+
+	set_scale(&ge.transform, dist * editor.gizmo_scale, &editor.gizmo_scene)
+}
+
 editor_update :: proc(editor: ^Editor) -> ^Camera {
 	profile_scoped()
 	cam_e := hm.get(&editor.gizmo_scene.entities, editor.cam)
@@ -469,8 +644,10 @@ editor_update :: proc(editor: ^Editor) -> ^Camera {
 	switch editor.mode {
 	case .Normal:
 		editor_update_normal(editor)
+		editor_update_gizmo(editor)
 	case .Camera:
 		editor_update_camera(editor)
+		editor_update_gizmo(editor)
 	case .Play:
 		editor_update_play(editor)
 		ce := hm.get(&editor.scene.entities, editor.game.main_camera)
@@ -479,6 +656,7 @@ editor_update :: proc(editor: ^Editor) -> ^Camera {
 
 	scene_update_transforms(&editor.gizmo_scene)
 	editor_draw(editor)
+
 
 	return cam
 }
@@ -557,10 +735,56 @@ imgui_vulkan_callback :: proc "c" (
 }
 
 editor_init_gizmos :: proc(editor: ^Editor) {
+	// tcenter_h, tcenter_e := scene_get_new_entity(editor.scene)
+	// tx_h, tx_e := scene_get_new_entity(editor.scene)
+	// ty_h, ty_e := scene_get_new_entity(editor.scene)
+	// tz_h, tz_e := scene_get_new_entity(editor.scene)
+	//
+	// tmrc := entity_add_mesh(editor.scene, tcenter_e, editor.ren, editor.res)
+	// tmrx := entity_add_mesh(editor.scene, tx_e, editor.ren, editor.res)
+	// tmry := entity_add_mesh(editor.scene, ty_e, editor.ren, editor.res)
+	// tmrz := entity_add_mesh(editor.scene, tz_e, editor.ren, editor.res)
+	//
+	// tmrc.color = {0.3, 0.3, 0.3, 1.0}
+	// tmrx.color = {1.0, 0.0, 0.0, 1.0}
+	// tmry.color = {0.0, 1.0, 0.0, 1.0}
+	// tmrz.color = {0.0, 0.0, 1.0, 1.0}
+	//
+	// tlength: f32 = 3.0
+	// twidth: f32 = 0.1
+	//
+	//
+	// toffset := tlength
+	//
+	//
+	// set_position(&tx_e.transform, {toffset, 0.0, 0.0}, editor.scene)
+	// set_position(&ty_e.transform, {0.0, toffset, 0.0}, editor.scene)
+	// set_position(&tz_e.transform, {0.0, 0.0, toffset}, editor.scene)
+	//
+	// set_scale(&tcenter_e.transform, {0.15, 0.15, 0.15}, editor.scene)
+	// set_scale(&tx_e.transform, {tlength, twidth, twidth}, editor.scene)
+	// set_scale(&ty_e.transform, {twidth, tlength, twidth}, editor.scene)
+	// set_scale(&tz_e.transform, {twidth, twidth, tlength}, editor.scene)
+	//
+	//
+	// set_parent(tx_h, tcenter_h, editor.scene)
+	// set_parent(ty_h, tcenter_h, editor.scene)
+	// set_parent(tz_h, tcenter_h, editor.scene)
+	// set_position(&tcenter_e.transform, {0.0, 10.0, 0.0}, editor.scene)
+	//
+	//
+	//
+	//
+
 	center_h, center_e := scene_get_new_entity(&editor.gizmo_scene)
 	x_h, x_e := scene_get_new_entity(&editor.gizmo_scene)
 	y_h, y_e := scene_get_new_entity(&editor.gizmo_scene)
 	z_h, z_e := scene_get_new_entity(&editor.gizmo_scene)
+
+	editor.transform_gizmo = center_h
+	editor.x_gizmo = x_h
+	editor.y_gizmo = y_h
+	editor.z_gizmo = z_h
 
 	mrc := entity_add_mesh(&editor.gizmo_scene, center_e, editor.ren, editor.res)
 	mrx := entity_add_mesh(&editor.gizmo_scene, x_e, editor.ren, editor.res)
@@ -619,6 +843,8 @@ editor_init :: proc(
 	cam_e: ^Entity
 	editor.cam, cam_e = scene_get_new_entity(&editor.gizmo_scene)
 	entity_add_camera(cam_e, editor.win)
+	set_position(&cam_e.transform, {0.0, 20.0, -10.0}, &editor.gizmo_scene)
+
 
 	// cam := &editor.cam.camera
 	// cam.aspect = 800.0 / 600.0
@@ -652,6 +878,7 @@ editor_init :: proc(
 	editor.controls[Editor_Actions.Play].control = &input.sdl_keys[sdl.Scancode.F2]
 
 	editor.mode = .Camera
+	editor.gizmo_scale = 0.01
 
 	editor_init_gizmos(editor)
 	imgui_init(editor)

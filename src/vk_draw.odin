@@ -3,8 +3,9 @@ package main
 import imgui "../../odin-imgui"
 import "../../odin-imgui/imgui_impl_vulkan"
 import hm "core:container/handle_map"
+import "core:crypto/_fiat/field_scalar25519"
 import "core:fmt"
-import "core:math/linalg"
+import la "core:math/linalg"
 import "core:mem"
 import "core:slice"
 
@@ -260,6 +261,18 @@ draw_forward :: proc(
 			}
 		}
 
+		// scaled_model := e.transform.world_transform
+
+		// te := entity_get(editor.transform_gizmo, &editor.gizmo_scene)
+		// ce := entity_get(editor.cam, &editor.gizmo_scene)
+		//
+		// dist := la.length(te.transform.pos - ce.transform.pos)
+		// dist = 1.0 - dist
+		// scale: [3]f32 = {dist, dist, dist}
+		//
+		//
+		// scaled_model = scaled_model * la.matrix4_scale(scale)
+
 
 		muni: Mesh_Uniforms = {
 			model         = e.transform.world_transform,
@@ -298,7 +311,192 @@ draw_forward :: proc(
 				&pc,
 			)
 
-			fmt.println("Drawing Gizmos!")
+			vk.CmdDrawIndexed(cmd, u32(sm.index_count), 1, u32(sm.index_offset), 0, 0)
+		}
+	}
+
+	vk.CmdEndRendering(cmd)
+}
+
+
+draw_gizmos :: proc(
+	cmd: vk.CommandBuffer,
+	ren: ^Renderer,
+	win: ^Window,
+	cam: ^Camera,
+	s: ^Scene,
+	editor: ^Editor,
+) {
+	profile_scoped()
+	frame := ren.frame_index
+
+	cai: vk.RenderingAttachmentInfo = {
+		sType = .RENDERING_ATTACHMENT_INFO,
+		imageView = ren.forward_images[frame].view,
+		imageLayout = .ATTACHMENT_OPTIMAL,
+		loadOp = .LOAD,
+		storeOp = .STORE,
+		clearValue = {color = {float32 = {0.0, 0.0, 0.0, 1.0}}},
+	}
+	//
+	dai: vk.RenderingAttachmentInfo = {
+		sType = .RENDERING_ATTACHMENT_INFO,
+		imageView = ren.depth_image.view,
+		imageLayout = .ATTACHMENT_OPTIMAL,
+		loadOp = .CLEAR,
+		storeOp = .DONT_CARE,
+		clearValue = {depthStencil = {depth = 0.0, stencil = 0}},
+	}
+
+	ri: vk.RenderingInfo = {
+		sType = .RENDERING_INFO,
+		renderArea = {extent = {width = ren.post_size.x, height = ren.post_size.y}},
+		layerCount = 1,
+		colorAttachmentCount = 1,
+		pColorAttachments = &cai,
+		pDepthAttachment = &dai,
+	}
+
+	// cai: vk.RenderingAttachmentInfo = {
+	// 	sType       = .RENDERING_ATTACHMENT_INFO,
+	// 	imageView   = ren.forward_images[frame].view,
+	// 	imageLayout = .ATTACHMENT_OPTIMAL,
+	// 	loadOp      = .LOAD,
+	// 	storeOp     = .STORE,
+	// 	// clearValue = {color = {float32 = {0.0, 0.0, 0.0, 1.0}}},
+	// }
+	//
+	// ri: vk.RenderingInfo = {
+	// 	sType = .RENDERING_INFO,
+	// 	renderArea = {extent = {width = ren.post_size.x, height = ren.post_size.y}},
+	// 	layerCount = 1,
+	// 	colorAttachmentCount = 1,
+	// 	pColorAttachments = &cai,
+	// }
+
+	vk.CmdBeginRendering(cmd, &ri)
+
+	vp: vk.Viewport = {
+		width    = f32(ren.post_size.x),
+		height   = f32(ren.post_size.y),
+		minDepth = 1.0,
+		maxDepth = 0.0,
+	}
+
+	vk.CmdSetViewport(cmd, 0, 1, &vp)
+
+	sc: vk.Rect2D = {
+		extent = {width = ren.post_size.x, height = ren.post_size.y},
+	}
+
+	vk.CmdSetScissor(cmd, 0, 1, &sc)
+
+	vk.CmdBindPipeline(cmd, .GRAPHICS, ren.gizmo_pipeline)
+
+	mn := win.input.relative_mouse_pos / [2]f32{f32(win.w), f32(win.h)}
+
+	mx := f32(ren.post_size.x) * mn.x
+	my := f32(ren.post_size.y) * mn.y
+
+	ren.per_frame_uniform.proj = cam.proj
+	ren.per_frame_uniform.view = cam.view
+	ren.per_frame_uniform.mouse_pos = {u32(mx), u32(my)}
+
+	mem.copy(
+		ren.test_buff[frame].alloc_info.pMappedData,
+		&ren.per_frame_uniform,
+		size_of(Frame_Uniforms),
+	)
+
+	offset: u32 = 0
+	vk.CmdBindDescriptorSets(
+		cmd,
+		.GRAPHICS,
+		ren.forward_pipeline_layout,
+		0,
+		1,
+		&ren.desc_set_tex,
+		0,
+		{},
+	)
+
+
+	pc: Push_Constants = {
+		addr      = ren.test_buff[frame].address,
+		tex_index = 0,
+	}
+
+	vk.CmdPushConstants(
+		cmd,
+		ren.forward_pipeline_layout,
+		{.FRAGMENT, .VERTEX},
+		0,
+		size_of(Push_Constants),
+		&pc,
+	)
+
+	vk.CmdBindDescriptorSets(
+		cmd,
+		.GRAPHICS,
+		ren.forward_pipeline_layout,
+		2,
+		1,
+		&ren.desc_set_pick[frame],
+		0,
+		nil,
+	)
+
+	voffset: vk.DeviceSize = 0
+
+
+	it := hm.iterator_make(&editor.gizmo_scene.entities)
+	for e, h in hm.iterate(&it) {
+		if .Mesh_Renderer not_in e.flags do continue
+
+		mr := &e.mesh_renderer
+		m := mr.mesh
+
+
+		voffset: vk.DeviceSize = 0
+		vk.CmdBindVertexBuffers(cmd, 0, 1, &m.buffer.buff, &voffset)
+		vk.CmdBindIndexBuffer(cmd, m.buffer.buff, vk.DeviceSize(m.index_offset), .UINT32)
+
+		muni: Mesh_Uniforms = {
+			model         = e.transform.world_transform,
+			normal_matrix = mr.normal_matrix,
+			color         = mr.color,
+			entity_handle = h,
+		}
+
+
+		mem.copy(mr.uniform_buffers[frame].alloc_info.pMappedData, &muni, size_of(Mesh_Uniforms))
+
+		vk.CmdBindDescriptorSets(
+			cmd,
+			.GRAPHICS,
+			ren.forward_pipeline_layout,
+			1,
+			1,
+			&mr.desc_sets[frame],
+			0,
+			nil,
+		)
+
+
+		for &sm, i in mr.mesh.submeshes {
+			pc: Push_Constants = {
+				addr      = ren.test_buff[frame].address,
+				tex_index = sm.tex_index,
+			}
+
+			vk.CmdPushConstants(
+				cmd,
+				ren.forward_pipeline_layout,
+				{.FRAGMENT, .VERTEX},
+				0,
+				size_of(Push_Constants),
+				&pc,
+			)
 
 			vk.CmdDrawIndexed(cmd, u32(sm.index_count), 1, u32(sm.index_offset), 0, 0)
 		}
@@ -539,6 +737,7 @@ draw_frame :: proc(ren: ^Renderer, win: ^Window, cam: ^Camera, s: ^Scene, editor
 	ren.picker.hit_count = 0
 	cmd := begin_frame(ren)
 	draw_forward(cmd, ren, win, cam, s, editor)
+	draw_gizmos(cmd, ren, win, cam, s, editor)
 	draw_post(cmd, ren, win)
 	end_frame(cmd, ren)
 	sort_picking_hits(ren)
